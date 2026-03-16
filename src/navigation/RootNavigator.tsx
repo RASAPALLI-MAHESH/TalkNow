@@ -1,7 +1,7 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import HomePage from '../../app/mainTabs/HomePage';
+import HomePage from '../../app/MainScreen/tabs';
 import useAuth from '../../hooks/useAuth';
 import AuthNavigator from './AuthNavigator';
 
