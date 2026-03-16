@@ -16,6 +16,48 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npx expo start
    ```
 
+## Auth + backend setup
+
+This repo includes an Express + MongoDB backend in `backend/`.
+
+### Required environment variables
+
+- `MONGO_URI` (optional; defaults to `mongodb://localhost:27017/productiv`)
+- `JWT_SECRET` (required in production; used to sign/verify auth tokens)
+- `BREVO_API_KEY` (required to send OTP emails)
+- `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` (optional)
+
+### Pointing the app to the API
+
+Set `EXPO_PUBLIC_API_URL` to either:
+
+- a server base URL (recommended): `http://<host>:8080` (the app will call `/api/auth/...`), or
+- the full auth base: `http://<host>:8080/api/auth`
+
+### Running the backend
+
+From the repo root:
+
+```bash
+npm run backend
+```
+
+Or equivalently:
+
+```bash
+node server.js
+```
+
+### Testing password reset locally
+
+If you want to test the forgot/reset password flow without waiting for email delivery, you can run:
+
+```bash
+node test-password-reset.js <email> <newPassword> [apiBase]
+```
+
+This calls the HTTP endpoints and reads the generated OTP from MongoDB for local testing.
+
 In the output, you'll find options to open the app in a
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)
@@ -23,7 +65,7 @@ In the output, you'll find options to open the app in a
 - [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+You can start developing by editing the files inside the **app** directory. This project uses React Navigation.
 
 ## Get a fresh project
 

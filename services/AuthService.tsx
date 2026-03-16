@@ -1,0 +1,192 @@
+// This file talks to the backend to handle authentication related tasks such as login, logout, and registration.
+import axios from 'axios';
+import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
+
+const inferDevServerBaseUrl = (): string | null => {
+    // In Expo dev, hostUri often looks like: "192.168.1.10:8082".
+    // Using this IP helps physical devices reach your backend on the same machine.
+    const hostUri = (Constants as any)?.expoConfig?.hostUri as string | undefined;
+    if (!hostUri || typeof hostUri !== 'string') return null;
+
+    const host = hostUri.split(':')[0]?.trim();
+    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
+
+    return `http://${host}:8080`;
+};
+
+const getDefaultApiUrl = (): string => {
+    // Prefer explicit configuration.
+    const envUrl = process.env.EXPO_PUBLIC_API_URL;
+    if (typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
+
+    // Expo dev: infer from host URI.
+    const inferred = inferDevServerBaseUrl();
+    if (inferred) return inferred;
+
+    // Emulator defaults.
+    if (Platform.OS === 'android') return 'http://10.0.2.2:8080';
+    return 'http://localhost:8080';
+};
+
+const API_URL = getDefaultApiUrl();
+
+export type AuthUser = {
+    id?: string;
+    username?: string;
+    email?: string;
+    [key: string]: unknown;
+};
+
+export type AuthResponse = {
+    user?: AuthUser;
+    token?: string;
+    message?: string;
+    [key: string]: unknown;
+};
+
+export const getAuthErrorMessage = (error: unknown, fallbackMessage: string) => {
+    if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        const data = error.response?.data as any;
+        const serverMessage = typeof data?.message === 'string' ? data.message : '';
+
+        if (serverMessage.trim().length > 0) return serverMessage;
+
+        // No response usually means network / DNS / CORS / wrong API URL.
+        if (!error.response) {
+            if ((error as any)?.code === 'ECONNABORTED') {
+                return 'Request timed out. Check your connection and try again.';
+            }
+            const base = typeof client?.defaults?.baseURL === 'string' ? client.defaults.baseURL : '';
+            const suffix = base ? ` (using ${base})` : '';
+            return `Unable to reach the server${suffix}. Check your internet connection and API URL.`;
+        }
+
+        if (status === 429) return 'Too many attempts. Please wait and try again.';
+        if (status && status >= 500) return 'Server error. Please try again in a moment.';
+    }
+
+    if (error instanceof Error && error.message.trim().length > 0) {
+        return error.message;
+    }
+    return fallbackMessage;
+};
+
+const client = axios.create({
+    baseURL: '',
+    timeout: 10000,
+});
+
+const normalizeAuthBaseUrl = (rawUrl: string) => {
+    const trimmed = rawUrl.replace(/\/$/, '');
+    if (trimmed.endsWith('/api/auth')) return trimmed;
+    if (trimmed.endsWith('/api')) return `${trimmed}/auth`;
+    return `${trimmed}/api/auth`;
+};
+
+client.defaults.baseURL = normalizeAuthBaseUrl(API_URL);
+
+// Request interceptor to attach JWT token to headers securely
+client.interceptors.request.use(async (config) => {
+    const token = await SecureStore.getItemAsync('userToken');
+    if (token) {
+        // Axios v1 types may represent headers as AxiosHeaders; mutate in-place.
+        (config.headers as any) = config.headers ?? {};
+        (config.headers as any).Authorization = `Bearer ${token}`;
+    }
+    return config;
+}, (error) => Promise.reject(error));
+
+const setToken = async (token?: string) => {
+    if (token) {
+        await SecureStore.setItemAsync('userToken', token);
+    }
+};
+
+const clearToken = async () => {
+    await SecureStore.deleteItemAsync('userToken');
+};
+
+// Response interceptor: if a token is rejected, clear it so the app can recover cleanly.
+client.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+        const status = error?.response?.status;
+        if (status === 401) {
+            await clearToken();
+        }
+        return Promise.reject(error);
+    }
+);
+
+export const login = async (username: string, password: string): Promise<AuthResponse> => {
+    const response = await client.post('/login', { username, password });
+    await setToken(response.data.token);
+    return response.data;
+};
+
+export const sendSignupOtp = async (email: string): Promise<AuthResponse> => {
+    const response = await client.post('/send-signup-otp', { email });
+    return response.data;
+};
+
+export const verifySignupOtp = async (email: string, otp: string): Promise<AuthResponse> => {
+    const response = await client.post('/verify-signup-otp', { email, otp });
+    return response.data;
+};
+
+export const signUp = async (Firstname: string, email: string, username: string, password: string, otp: string): Promise<AuthResponse> => {
+    const response = await client.post('/signup', { Firstname, email, username, password, otp });
+    await setToken(response.data.token);
+    return response.data;
+};
+
+export const forgotPassword = async (email: string): Promise<AuthResponse> => {
+    const response = await client.post('/forgot-password', { email });
+    return response.data;
+};
+
+export const resetPassword = async (email: string, otp: string, newPassword: string): Promise<AuthResponse> => {
+    const response = await client.post('/reset-password', { email, otp, newPassword });
+    return response.data;
+};
+
+export const getCurrentUser = async (): Promise<AuthUser | null> => {
+    const token = await SecureStore.getItemAsync('userToken');
+    if (!token) return null;
+    
+    // Calls the newly protected /profile endpoint
+    try {
+        const response = await client.get('/profile');
+        return response.data?.user ?? response.data ?? null;
+    } catch (err: any) {
+        if (err?.response?.status === 401) {
+            await clearToken();
+        }
+        throw err;
+    }
+};
+
+export const logout = async (): Promise<void> => {
+    await clearToken();
+    try {
+        await client.post('/logout');
+    } catch (e) {
+        // Safe to ignore if server unreachable
+    }
+};
+
+const AuthService = {
+    login,
+    signUp,
+    forgotPassword,
+    resetPassword,
+    getCurrentUser,
+    logout,
+    sendSignupOtp,
+    verifySignupOtp
+};
+
+export default AuthService;
