@@ -1,4 +1,5 @@
 require("dotenv").config();
+const http = require('http');
 const express = require("express");
 const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
@@ -6,6 +7,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
+const { attachWebSocketServer } = require('./services/websocketServer');
 
 const server = express();
 
@@ -52,8 +54,13 @@ server.get(
 )
 
 const PORT = process.env.PORT || 8080;
-// Bind to 0.0.0.0 to accept connections from the local network (your Expo app) and not just localhost
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is listening globally on port ${PORT} across all network interfaces`);
-})
+const httpServer = http.createServer(server);
+
+// WebSocket server shares the same port (path: /ws)
+attachWebSocketServer(httpServer);
+
+// Bind to 0.0.0.0 to accept connections from the local network and Render routing
+httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`HTTP + WS server listening on port ${PORT}`);
+});
 

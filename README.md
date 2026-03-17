@@ -39,6 +39,13 @@ For a deployed backend (e.g. Render), use HTTPS, for example:
 - `https://<your-service>.onrender.com`
 - `https://<your-service>.onrender.com/api/auth`
 
+### WebSocket (optional)
+
+The backend also exposes a WebSocket endpoint at `/ws` (same domain/port as HTTP).
+
+- If you set `EXPO_PUBLIC_WS_URL`, the app will use it directly (example: `wss://<your-service>.onrender.com/ws`).
+- Otherwise the app derives it automatically from `EXPO_PUBLIC_API_URL`.
+
 ### Running the backend
 
 From the repo root:

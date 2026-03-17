@@ -194,6 +194,7 @@ exports.userProfile = async (req, res) => {
             return res.status(404).json({message: "User not found"});
         }
         res.status(200).json({
+            id: existingUser._id,
             username: existingUser.username,
             email: existingUser.email,
             profilePicture: existingUser.profilePicture
