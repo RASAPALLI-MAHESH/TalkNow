@@ -35,8 +35,8 @@ exports.sendSignupOtp = async (req, res) => {
             { upsert: true, new: true }
         );
         
-        await sendOtp(email, otp);
-        res.status(200).json({ message: "OTP sent successfully" });
+        const result = await sendOtp(email, otp);
+        res.status(200).json({ message: "OTP sent successfully", messageId: result?.messageId });
     } catch(err) {
         res.status(500).json({ message: "Server error", error: err.message });
     }
@@ -149,8 +149,8 @@ exports.forgotPassword = async (req, res) => {
         existingUser.resetOtp = otp;
         existingUser.otpExpiry = Date.now() + 10*60*1000;
         await existingUser.save();
-        await sendOtp(email, otp);
-        res.status(200).json({message: "OTP sent to email"});
+        const result = await sendOtp(email, otp);
+        res.status(200).json({message: "OTP sent to email", messageId: result?.messageId});
     } catch(err) {
         res.status(500).json({message: "Server error", error: err.message});
     }

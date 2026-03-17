@@ -8,7 +8,12 @@ const sendOtp = async (email, otp) => {
   }
 
   const senderName = process.env.BREVO_SENDER_NAME || 'TalkNow';
-  const senderEmail = process.env.BREVO_SENDER_EMAIL || 'talknow@example.com';
+  const senderEmail = process.env.BREVO_SENDER_EMAIL;
+  if (!senderEmail) {
+    throw new Error(
+      'BREVO_SENDER_EMAIL is not set. Configure a verified sender email in Brevo and set BREVO_SENDER_EMAIL in your environment.'
+    );
+  }
 
   const payload = {
     sender: {
@@ -27,8 +32,18 @@ const sendOtp = async (email, otp) => {
     },
   };
 
-  const response = await axios.post(BREVO_URL, payload, config);
-  return response.data;
+  try {
+    const response = await axios.post(BREVO_URL, payload, config);
+    return response.data;
+  } catch (err) {
+    if (err && err.response) {
+      const status = err.response.status;
+      const data = err.response.data;
+      const detail = typeof data === 'string' ? data : JSON.stringify(data);
+      throw new Error(`Brevo email send failed (status ${status}): ${detail}`);
+    }
+    throw err;
+  }
 };
 
 module.exports = sendOtp;
