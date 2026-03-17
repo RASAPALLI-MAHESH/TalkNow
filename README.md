@@ -34,6 +34,11 @@ Set `EXPO_PUBLIC_API_URL` to either:
 - a server base URL (recommended): `http://<host>:8080` (the app will call `/api/auth/...`), or
 - the full auth base: `http://<host>:8080/api/auth`
 
+For a deployed backend (e.g. Render), use HTTPS, for example:
+
+- `https://<your-service>.onrender.com`
+- `https://<your-service>.onrender.com/api/auth`
+
 ### Running the backend
 
 From the repo root:
