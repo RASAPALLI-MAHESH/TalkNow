@@ -1,7 +1,8 @@
-import ChatBar from '@/app/components/chatbar';
+import ChatBar, { type ChatListItem } from '@/app/components/chatbar';
 import { useWebSocketClient } from '@/services/WebSocketClient';
-import React from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 const formatChatTime = (raw?: string) => {
@@ -14,8 +15,82 @@ const formatChatTime = (raw?: string) => {
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
     useWebSocketClient();
 
-    const renderItem = ({ item }: { item: (typeof ChatBar)[number] }) => (
-        <Pressable style={styles.row} onPress={() => navigation.navigate('Chatroom')}>
+    const [query, setQuery] = useState('');
+    const [searchMode, setSearchMode] = useState<'local' | 'global'>('local');
+    const [searchWidth, setSearchWidth] = useState(0);
+
+    const iconPulse = useRef(new Animated.Value(0)).current;
+    const scanAnim = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        const pulse = Animated.loop(
+            Animated.sequence([
+                Animated.timing(iconPulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+                Animated.timing(iconPulse, { toValue: 0, duration: 650, useNativeDriver: true }),
+            ])
+        );
+        pulse.start();
+        return () => pulse.stop();
+    }, [iconPulse]);
+
+    useEffect(() => {
+        if (searchMode !== 'global' || searchWidth <= 0) {
+            scanAnim.stopAnimation();
+            scanAnim.setValue(0);
+            return;
+        }
+
+        const scan = Animated.loop(
+            Animated.timing(scanAnim, { toValue: 1, duration: 1100, useNativeDriver: true })
+        );
+        scan.start();
+        return () => scan.stop();
+    }, [scanAnim, searchMode, searchWidth]);
+
+    const scanLineWidth = 90;
+    const scanTranslateTop = useMemo(() => {
+        return scanAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [-scanLineWidth, searchWidth + scanLineWidth],
+        });
+    }, [scanAnim, searchWidth]);
+
+    const scanTranslateBottom = useMemo(() => {
+        return scanAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [searchWidth + scanLineWidth, -scanLineWidth],
+        });
+    }, [scanAnim, searchWidth]);
+
+    const filteredChats = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return ChatBar;
+        return ChatBar.filter((c) => {
+            const name = String(c.name ?? '').toLowerCase();
+            const lastMessage = String(c.lastMessage ?? '').toLowerCase();
+            if (searchMode === 'global') return name.includes(q) || lastMessage.includes(q);
+            return name.includes(q);
+        });
+    }, [query, searchMode]);
+
+    const showNoMatches = query.trim().length > 0 && filteredChats.length === 0;
+
+    const ListEmpty = () => (
+        <View style={styles.emptyWrap}>
+            <Text style={styles.emptyTitle}>{showNoMatches ? 'No matches' : 'No chats yet'}</Text>
+            <Text style={styles.emptySubtitle}>
+                {showNoMatches ? 'Try a different search term.' : 'Start a conversation to see it here.'}
+            </Text>
+        </View>
+    );
+
+    const renderItem = ({ item }: { item: ChatListItem }) => (
+        <Pressable
+            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
+            onPress={() => navigation.navigate('Chatroom')}
+            accessibilityRole="button"
+        >
             <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
             </View>
@@ -40,17 +115,78 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             </View>
 
             <View style={styles.searchWrap}>
-                <TextInput placeholder='Search' style={styles.searchbar} />
+                <View
+                    style={[
+                        styles.searchbar,
+                        searchMode === 'global' ? styles.searchbarGlobal : styles.searchbarLocal,
+                    ]}
+                    onLayout={(e) => setSearchWidth(e.nativeEvent.layout.width)}
+                >
+                    {searchMode === 'global' && searchWidth > 0 ? (
+                        <View pointerEvents="none" style={styles.searchScanWrap}>
+                            <Animated.View
+                                style={[
+                                    styles.searchScanLineTop,
+                                    { width: scanLineWidth, transform: [{ translateX: scanTranslateTop }] },
+                                ]}
+                            />
+                            <Animated.View
+                                style={[
+                                    styles.searchScanLineBottom,
+                                    { width: scanLineWidth, transform: [{ translateX: scanTranslateBottom }] },
+                                ]}
+                            />
+                        </View>
+                    ) : null}
+
+                    <TextInput
+                        placeholder={searchMode === 'global' ? 'Search globally' : 'Search'}
+                        placeholderTextColor="#666"
+                        style={styles.searchInput}
+                        value={query}
+                        onChangeText={setQuery}
+                        onFocus={() => setSearchMode('local')}
+                        autoCorrect={false}
+                        autoCapitalize="none"
+                        clearButtonMode="while-editing"
+                        returnKeyType="search"
+                    />
+
+                    <Pressable
+                        onPress={() => setSearchMode((m) => (m === 'global' ? 'local' : 'global'))}
+                        style={({ pressed }) => [styles.searchIconButton, pressed && styles.rowPressed]}
+                        android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
+                        hitSlop={10}
+                        accessibilityRole="button"
+                        accessibilityLabel={searchMode === 'global' ? 'Switch to local search' : 'Switch to global search'}
+                    >
+                        <Animated.View
+                            style={{
+                                opacity: iconPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+                                transform: [
+                                    {
+                                        scale: iconPulse.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.05] }),
+                                    },
+                                ],
+                            }}
+                        >
+                            <Ionicons name="search" size={20} color="#6733d0" />
+                        </Animated.View>
+                    </Pressable>
+                </View>
             </View>
 
             <FlatList
-            
-                data={ChatBar}
+
+                data={filteredChats}
                 keyExtractor={(item, index) => String(item.id ?? index)}
                 renderItem={renderItem}
                 style={styles.list}
                 contentContainerStyle={styles.listContent}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                ListEmptyComponent={ListEmpty}
+                showsVerticalScrollIndicator={false}
             />
 
         </SafeAreaView>
@@ -64,7 +200,7 @@ const styles = StyleSheet.create({
     },
     header: {
         width: '100%',
-        height: 60,
+        height: 56,
         backgroundColor: '#6733d0',
         top: 0,
         left: 0,
@@ -73,7 +209,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 20,
+        paddingHorizontal: 12,
     },
     headerTitle: {
         color: '#fff',
@@ -88,25 +224,76 @@ const styles = StyleSheet.create({
     searchWrap: {
         width: '100%',
         alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingTop: 10,
+        paddingBottom: 6,
     },
     searchbar: {
         width: '100%',
         maxWidth: 420,
-        height: 40,
-        borderColor: '#350d81',
+        minHeight: 40,
         borderWidth: 1,
-        borderRadius: 20,
-        paddingHorizontal: 15,
-        marginTop: 10,
+        borderRadius: 30,
+        paddingLeft: 15,
+        paddingRight: 6,
+        backgroundColor: '#fff',
+        flexDirection: 'row',
+        alignItems: 'center',
+        overflow: 'hidden',
     }
     ,
+    searchbarLocal: {
+        borderColor: '#350d81',
+    },
+    searchbarGlobal: {
+        borderColor: '#6733d0',
+        borderWidth: 2,
+    },
+    searchInput: {
+        flex: 1,
+        height: 40,
+        paddingVertical: 0,
+        paddingRight: 10,
+        color: '#111',
+    },
+    searchIconButton: {
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 18,
+        overflow: 'hidden',
+    },
+    searchScanWrap: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+    },
+    searchScanLineTop: {
+        position: 'absolute',
+        top: 0,
+        height: 2,
+        borderRadius: 1,
+        backgroundColor: '#6733d0',
+        opacity: 0.9,
+    },
+    searchScanLineBottom: {
+        position: 'absolute',
+        bottom: 0,
+        height: 2,
+        borderRadius: 1,
+        backgroundColor: '#6733d0',
+        opacity: 0.55,
+    },
     list: {
         flex: 1,
         width: '100%',
     },
     listContent: {
-        paddingTop: 20,
-        paddingBottom: 10,
+        paddingTop: 8,
+        paddingBottom: 14,
         alignItems: 'center',
     },
     row: {
@@ -118,6 +305,9 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#eee',
+    },
+    rowPressed: {
+        opacity: 0.75,
     },
     avatar: {
         width: 48,
@@ -156,6 +346,26 @@ const styles = StyleSheet.create({
     lastMessage: {
         fontSize: 13,
         color: '#666',
+    },
+
+    emptyWrap: {
+        width: '100%',
+        maxWidth: 420,
+        paddingHorizontal: 16,
+        paddingTop: 28,
+        alignItems: 'center',
+    },
+    emptyTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#111',
+        marginBottom: 6,
+        textAlign: 'center',
+    },
+    emptySubtitle: {
+        fontSize: 13,
+        color: '#666',
+        textAlign: 'center',
     },
 
 });
