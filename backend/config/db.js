@@ -1,15 +1,37 @@
 const mongoose = require("mongoose");
+const dns = require('dns');
 
 const connectDB = async () => {
   try {
     // maxPoolSize helps the database handle thousands of concurrent queries rather 
     // than creating and destroying a connection per request
-    await mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/productiv", {
-        maxPoolSize: 100, // Important for scaling MongoDB connections
-        serverSelectionTimeoutMS: 5000,
-        socketTimeoutMS: 45000,
-    });
-    console.log("MongoDB connected with Connection Pooling Enabled");
+    const mongoUri = process.env.MONGO_URI || "mongodb://localhost:27017/productiv";
+    const connectOptions = {
+      maxPoolSize: 100,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    };
+
+    try {
+      await mongoose.connect(mongoUri, connectOptions);
+      console.log("MongoDB connected with Connection Pooling Enabled");
+      return;
+    } catch (firstError) {
+      const msg = String(firstError?.message || firstError || '');
+
+      // Common on some networks: DNS server refuses SRV lookup used by mongodb+srv.
+      // Retry once using public DNS resolvers.
+      const shouldRetryWithPublicDns =
+        mongoUri.startsWith('mongodb+srv://') &&
+        (/querySrv\s+ECONNREFUSED/i.test(msg) || /querySrv\s+ENOTFOUND/i.test(msg));
+
+      if (!shouldRetryWithPublicDns) throw firstError;
+
+      dns.setServers(['1.1.1.1', '8.8.8.8']);
+      await mongoose.connect(mongoUri, connectOptions);
+      console.log("MongoDB connected (public DNS fallback) with Connection Pooling Enabled");
+      return;
+    }
   } catch (error) {
     console.error("MongoDB connection failed", error);
     process.exit(1);

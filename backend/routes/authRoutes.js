@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../Controllers/AuthController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { searchUsers } = require("../searchUsers");
 
 // Signup Flow
 router.post("/send-signup-otp", authController.sendSignupOtp);
@@ -16,5 +17,19 @@ router.post("/reset-password", authController.resetPassword);
 // Protected routes
 router.post("/logout", authMiddleware, authController.logout);
 router.get("/profile", authMiddleware, authController.userProfile);
+router.get("/search-users", async (req, res) => {
+    try{
+        const {query} = req.query;
+        if(!query || typeof query !== 'string' || !query.trim()){
+            return res.json({ users: [] });
+        }
 
+        const users = await searchUsers(query, { limit: 20 });
+        res.json({ users });
+    }
+    catch(err){
+        console.error("Error searching users:", err);
+        res.status(500).json({message : "Internal server error"});
+    }
+});
 module.exports = router;

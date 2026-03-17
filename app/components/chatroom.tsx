@@ -1,5 +1,6 @@
 import styles from '@/app/components/chatroomStyles';
 import useAuth from '@/hooks/useAuth';
+import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
 import {
     FlatList,
@@ -41,9 +42,12 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
 
     const canSend = draft.trim().length > 0;
 
-    const bottomInset = insets.bottom;
-    const composerBottomPad = Math.max(8, bottomInset);
-    const composerApproxHeight = 56 + composerBottomPad;
+    const composerPaddingBottom = Math.max(10, insets.bottom);
+
+    const handleBack = () => {
+        Keyboard.dismiss();
+        navigation.goBack();
+    };
 
     const handleSend = () => {
         if (!canSend) return;
@@ -72,20 +76,28 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                     <View style={styles.container}>
                         <View style={styles.header}>
                             <Pressable
-                                onPress={() => navigation.goBack()}
+                                onPress={handleBack}
                                 style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
-                                android_ripple={Platform.OS === 'android' ? { color: 'rgba(255,255,255,0.18)' } : undefined}
+                                android_ripple={
+                                    Platform.OS === 'android'
+                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        : undefined
+                                }
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel="Go back"
                             >
-                                <Text style={styles.headerButtonText}>(←)</Text>
+                                <Ionicons name="arrow-back" size={22} color="#fff" />
                             </Pressable>
 
                             <Pressable
                                 onPress={() => {}}
                                 style={({ pressed }) => [styles.avatarButton, pressed && styles.pressed]}
-                                android_ripple={Platform.OS === 'android' ? { color: 'rgba(255,255,255,0.18)' } : undefined}
+                                android_ripple={
+                                    Platform.OS === 'android'
+                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        : undefined
+                                }
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel="Open profile"
@@ -105,7 +117,11 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                             <Pressable
                                 onPress={() => {}}
                                 style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
-                                android_ripple={Platform.OS === 'android' ? { color: 'rgba(255,255,255,0.18)' } : undefined}
+                                android_ripple={
+                                    Platform.OS === 'android'
+                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        : undefined
+                                }
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel="Open chat details"
@@ -118,22 +134,23 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                             <Pressable
                                 onPress={() => {}}
                                 style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
-                                android_ripple={Platform.OS === 'android' ? { color: 'rgba(255,255,255,0.18)' } : undefined}
+                                android_ripple={
+                                    Platform.OS === 'android'
+                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        : undefined
+                                }
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel="More options"
                             >
-                                <Text style={styles.headerButtonText}>⋯</Text>
+                                <Ionicons name="ellipsis-vertical" size={20} color="#fff" />
                             </Pressable>
                         </View>
 
                         <FlatList
                             data={messages}
                             keyExtractor={(item) => item.id}
-                            contentContainerStyle={[
-                                styles.messagesContent,
-                                { paddingBottom: composerApproxHeight + 12 },
-                            ]}
+                            contentContainerStyle={styles.messagesContent}
                             keyboardShouldPersistTaps="handled"
                             keyboardDismissMode="on-drag"
                             renderItem={({ item }) => (
@@ -148,7 +165,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                             )}
                         />
 
-                        <View style={[styles.composer, { paddingBottom: composerBottomPad }]}>
+                        <View style={[styles.composer, { paddingBottom: composerPaddingBottom }]}>
                             <View style={styles.inputBar}>
                                 <TextInput
                                     placeholder="Type a message…"
@@ -158,6 +175,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                                     multiline
                                     placeholderTextColor="#6733d0"
                                     returnKeyType="send"
+                                    textAlignVertical="center"
                                     onSubmitEditing={() => {
                                         if (Platform.OS === 'ios') return;
                                         handleSend();

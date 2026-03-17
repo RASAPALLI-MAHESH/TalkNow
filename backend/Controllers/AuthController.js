@@ -17,9 +17,29 @@ const isOtpExpired = (createdAt) => {
     return Date.now() - created > OTP_TTL_MS;
 };
 
+const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase();
+const normalizeUsername = (value) => String(value ?? '').trim();
+const normalizeFirstname = (value) => String(value ?? '').trim();
+
+const asMongoDuplicateKeyMessage = (err) => {
+    // Mongoose wraps MongoServerError; prefer consistent checks.
+    const code = err?.code;
+    if (code !== 11000) return null;
+
+    const keys = err?.keyPattern || err?.keyValue || {};
+    if (keys.email) return 'Email already exists';
+    if (keys.username) return 'Username already taken';
+    return 'Duplicate value';
+};
+
+const isEmailProviderError = (err) => {
+    const msg = String(err?.message || '');
+    return msg.includes('BREVO_') || msg.startsWith('Brevo email send failed');
+};
+
 exports.sendSignupOtp = async (req, res) => {
     try {
-        const { email } = req.body;
+        const email = normalizeEmail(req.body?.email);
         if (!email) {
             return res.status(400).json({ message: "Email is required" });
         }
@@ -38,13 +58,19 @@ exports.sendSignupOtp = async (req, res) => {
         const result = await sendOtp(email, otp);
         res.status(200).json({ message: "OTP sent successfully", messageId: result?.messageId });
     } catch(err) {
+        const dup = asMongoDuplicateKeyMessage(err);
+        if (dup) return res.status(400).json({ message: dup });
+        if (isEmailProviderError(err)) {
+            return res.status(502).json({ message: err.message });
+        }
         res.status(500).json({ message: "Server error", error: err.message });
     }
 }
 
 exports.verifySignupOtp = async (req, res) => {
     try {
-        const { email, otp } = req.body;
+        const email = normalizeEmail(req.body?.email);
+        const otp = String(req.body?.otp ?? '').trim();
         if (!email || !otp) {
             return res.status(400).json({ message: "Email and OTP are required" });
         }
@@ -66,7 +92,12 @@ exports.verifySignupOtp = async (req, res) => {
 
 exports.signUp = async (req, res) => {
     try {
-        const { Firstname, username, password, email, otp } = req.body;
+        const Firstname = normalizeFirstname(req.body?.Firstname);
+        const username = normalizeUsername(req.body?.username);
+        const email = normalizeEmail(req.body?.email);
+        const password = String(req.body?.password ?? '');
+        const otp = String(req.body?.otp ?? '').trim();
+
         if (!Firstname || !username || !password || !email || !otp) {
             return res.status(400).json({ message: "Firstname, username, password, email and otp are required" });
         }
@@ -105,6 +136,8 @@ exports.signUp = async (req, res) => {
             user: { id: newUser._id, username: newUser.username, email: newUser.email }
         });
     } catch(err) {
+        const dup = asMongoDuplicateKeyMessage(err);
+        if (dup) return res.status(400).json({ message: dup });
         res.status(500).json({message: "Server error", error: err.message});
     }
 }
@@ -152,6 +185,9 @@ exports.forgotPassword = async (req, res) => {
         const result = await sendOtp(email, otp);
         res.status(200).json({message: "OTP sent to email", messageId: result?.messageId});
     } catch(err) {
+        if (isEmailProviderError(err)) {
+            return res.status(502).json({ message: err.message });
+        }
         res.status(500).json({message: "Server error", error: err.message});
     }
 }

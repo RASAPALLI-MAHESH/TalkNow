@@ -1,9 +1,26 @@
 import ChatBar, { type ChatListItem } from '@/app/components/chatbar';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, FlatList, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+    Animated,
+    FlatList,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+    type GestureResponderEvent,
+    type LayoutChangeEvent,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const MODE_TOGGLE_WIDTH = 104;
+const MODE_TOGGLE_PADDING = 2;
+const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
 
 const formatChatTime = (raw?: string) => {
     if (!raw) return '';
@@ -12,85 +29,174 @@ const formatChatTime = (raw?: string) => {
     return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
 
-const ChatsScreen = ({ navigation }: { navigation: any }) => {
-    useWebSocketClient();
+type GlobalUserSearchResult = {
+    id?: string;
+    _id?: string;
+    username?: string;
+    name?: string;
+    email?: string;
+};
 
-    const [query, setQuery] = useState('');
-    const [searchMode, setSearchMode] = useState<'local' | 'global'>('local');
-    const [searchWidth, setSearchWidth] = useState(0);
+const inferDevServerBaseUrl = (): string | null => {
+    const hostUri = (Constants as any)?.expoConfig?.hostUri as string | undefined;
+    if (!hostUri || typeof hostUri !== 'string') return null;
 
-    const iconPulse = useRef(new Animated.Value(0)).current;
-    const scanAnim = useRef(new Animated.Value(0)).current;
+    const host = hostUri.split(':')[0]?.trim();
+    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
 
-    useEffect(() => {
-        const pulse = Animated.loop(
-            Animated.sequence([
-                Animated.timing(iconPulse, { toValue: 1, duration: 650, useNativeDriver: true }),
-                Animated.timing(iconPulse, { toValue: 0, duration: 650, useNativeDriver: true }),
-            ])
-        );
-        pulse.start();
-        return () => pulse.stop();
-    }, [iconPulse]);
+    return `http://${host}:8080`;
+};
 
-    useEffect(() => {
-        if (searchMode !== 'global' || searchWidth <= 0) {
-            scanAnim.stopAnimation();
-            scanAnim.setValue(0);
-            return;
-        }
+const getDefaultApiUrl = (): string => {
+    const envUrl = process.env.EXPO_PUBLIC_API_URL;
+    if (typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
 
-        const scan = Animated.loop(
-            Animated.timing(scanAnim, { toValue: 1, duration: 1100, useNativeDriver: true })
-        );
-        scan.start();
-        return () => scan.stop();
-    }, [scanAnim, searchMode, searchWidth]);
+    const inferred = inferDevServerBaseUrl();
+    if (inferred) return inferred;
 
-    const scanLineWidth = 90;
-    const scanTranslateTop = useMemo(() => {
-        return scanAnim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [-scanLineWidth, searchWidth + scanLineWidth],
-        });
-    }, [scanAnim, searchWidth]);
+    if (Platform.OS === 'android') return 'http://10.0.2.2:8080';
+    return 'http://localhost:8080';
+};
 
-    const scanTranslateBottom = useMemo(() => {
-        return scanAnim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [searchWidth + scanLineWidth, -scanLineWidth],
-        });
-    }, [scanAnim, searchWidth]);
+const normalizeApiOrigin = (rawUrl: string) => {
+    const trimmed = rawUrl.trim().replace(/\/$/, '');
+    const withoutAuth = trimmed.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
+    return withoutAuth.replace(/\/$/, '');
+};
 
-    const filteredChats = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        if (!q) return ChatBar;
-        return ChatBar.filter((c) => {
-            const name = String(c.name ?? '').toLowerCase();
-            const lastMessage = String(c.lastMessage ?? '').toLowerCase();
-            if (searchMode === 'global') return name.includes(q) || lastMessage.includes(q);
-            return name.includes(q);
-        });
-    }, [query, searchMode]);
+const ChatRow = ({
+    item,
+    onPress,
+}: {
+    item: ChatListItem;
+    onPress: () => void;
+}) => {
+    const [layout, setLayout] = useState({ width: 0, height: 0 });
+    const [inkX, setInkX] = useState(0);
 
-    const showNoMatches = query.trim().length > 0 && filteredChats.length === 0;
+    const longPressFiredRef = useRef(false);
+    const touchXRef = useRef(0);
 
-    const ListEmpty = () => (
-        <View style={styles.emptyWrap}>
-            <Text style={styles.emptyTitle}>{showNoMatches ? 'No matches' : 'No chats yet'}</Text>
-            <Text style={styles.emptySubtitle}>
-                {showNoMatches ? 'Try a different search term.' : 'Start a conversation to see it here.'}
-            </Text>
-        </View>
-    );
+    // WhatsApp-like long-press ink: expands horizontally from touch point.
+    const inkScaleLeft = useRef(new Animated.Value(0)).current;
+    const inkScaleRight = useRef(new Animated.Value(0)).current;
+    const inkOpacity = useRef(new Animated.Value(0)).current;
 
-    const renderItem = ({ item }: { item: ChatListItem }) => (
+    const onLayout = (e: LayoutChangeEvent) => {
+        const { width, height } = e.nativeEvent.layout;
+        setLayout({ width, height });
+    };
+
+    const primeInk = (e: GestureResponderEvent) => {
+        if (!layout.width) return;
+        const x = Math.max(0, Math.min(layout.width, e.nativeEvent.locationX));
+        touchXRef.current = x;
+        setInkX(x);
+
+        inkOpacity.stopAnimation();
+        inkScaleLeft.stopAnimation();
+        inkScaleRight.stopAnimation();
+
+        inkOpacity.setValue(0);
+        inkScaleLeft.setValue(0);
+        inkScaleRight.setValue(0);
+    };
+
+    const startLongPressInk = () => {
+        if (!layout.width) return;
+        const x = Math.max(0, Math.min(layout.width, touchXRef.current));
+        setInkX(x);
+
+        inkOpacity.setValue(0);
+        inkScaleLeft.setValue(0);
+        inkScaleRight.setValue(0);
+
+        Animated.parallel([
+            Animated.timing(inkOpacity, {
+                toValue: 1,
+                duration: 90,
+                useNativeDriver: true,
+            }),
+            Animated.timing(inkScaleLeft, {
+                toValue: 1,
+                duration: 220,
+                useNativeDriver: true,
+            }),
+            Animated.timing(inkScaleRight, {
+                toValue: 1,
+                duration: 220,
+                useNativeDriver: true,
+            }),
+        ]).start();
+    };
+
+    return (
         <Pressable
+            onLayout={onLayout}
             style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-            android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
-            onPress={() => navigation.navigate('Chatroom')}
+            delayLongPress={240}
+            onPressIn={(e) => {
+                primeInk(e);
+            }}
+            onLongPress={() => {
+                longPressFiredRef.current = true;
+                startLongPressInk();
+            }}
+            onPress={() => {
+                if (longPressFiredRef.current) {
+                    longPressFiredRef.current = false;
+                    return;
+                }
+                onPress();
+            }}
+            onPressOut={() => {
+                longPressFiredRef.current = false;
+                Animated.timing(inkOpacity, {
+                    toValue: 0,
+                    duration: 140,
+                    useNativeDriver: true,
+                }).start();
+            }}
             accessibilityRole="button"
         >
+            <View pointerEvents="none" style={styles.rippleLayer}>
+                {/* Left side: expands from touch point to the left */}
+                <Animated.View
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: 0,
+                        width: inkX,
+                        backgroundColor: 'rgba(233,226,255,0.55)',
+                        opacity: inkOpacity,
+                        transform: [
+                            { translateX: inkX / 2 },
+                            { scaleX: inkScaleLeft },
+                            { translateX: -inkX / 2 },
+                        ],
+                    }}
+                />
+
+                {/* Right side: expands from touch point to the right */}
+                <Animated.View
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        bottom: 0,
+                        left: inkX,
+                        right: 0,
+                        backgroundColor: 'rgba(233,226,255,0.55)',
+                        opacity: inkOpacity,
+                        transform: [
+                            { translateX: -(Math.max(0, layout.width - inkX) / 2) },
+                            { scaleX: inkScaleRight },
+                            { translateX: Math.max(0, layout.width - inkX) / 2 },
+                        ],
+                    }}
+                />
+            </View>
+
             <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
             </View>
@@ -104,81 +210,396 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             </View>
         </Pressable>
     );
+};
+
+const ChatsScreen = ({ navigation }: { navigation: any }) => {
+    useWebSocketClient();
+
+    const insets = useSafeAreaInsets();
+    const horizontalSafePad = 12 + Math.max(insets.left, insets.right);
+
+    const [query, setQuery] = useState('');
+    const [searchMode, setSearchMode] = useState<'local' | 'global'>('local');
+
+    const [globalSearching, setGlobalSearching] = useState(false);
+    const [globalError, setGlobalError] = useState<string | null>(null);
+    const [globalResults, setGlobalResults] = useState<GlobalUserSearchResult[]>([]);
+    const [showingGlobal, setShowingGlobal] = useState(false);
+
+    const searchInputRef = useRef<TextInput | null>(null);
+    const focusAnim = useRef(new Animated.Value(0)).current;
+    const modeAnim = useRef(new Animated.Value(0)).current; // 0 = local, 1 = global
+    const spinAnim = useRef(new Animated.Value(0)).current;
+    const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
+
+    useEffect(() => {
+        Animated.timing(modeAnim, {
+            toValue: searchMode === 'global' ? 1 : 0,
+            duration: 180,
+            useNativeDriver: true,
+        }).start();
+    }, [modeAnim, searchMode]);
+
+    useEffect(() => {
+        if (!globalSearching) {
+            spinAnim.stopAnimation();
+            spinAnim.setValue(0);
+            return;
+        }
+
+        const loop = Animated.loop(
+            Animated.timing(spinAnim, {
+                toValue: 1,
+                duration: 900,
+                useNativeDriver: true,
+            })
+        );
+        loop.start();
+        return () => loop.stop();
+    }, [globalSearching, spinAnim]);
+
+    const runGlobalSearch = async (raw: string) => {
+        const q = raw.trim();
+        if (!q) {
+            setShowingGlobal(false);
+            setGlobalResults([]);
+            setGlobalError(null);
+            setGlobalSearching(false);
+            return;
+        }
+
+        setShowingGlobal(true);
+        setGlobalSearching(true);
+        setGlobalError(null);
+
+        try {
+            const token = await SecureStore.getItemAsync('userToken');
+            const url = `${apiOrigin}/api/auth/search-users?query=${encodeURIComponent(q)}`;
+
+            const headers: Record<string, string> = {
+                Accept: 'application/json',
+            };
+            if (token) headers.Authorization = `Bearer ${token}`;
+
+            const res = await fetch(url, {
+                method: 'GET',
+                headers,
+            });
+
+            if (!res.ok) {
+                const contentType = res.headers.get('content-type') || '';
+                let message = `Search failed (HTTP ${res.status}).`;
+                try {
+                    if (contentType.includes('application/json')) {
+                        const errJson = await res.json();
+                        if (typeof errJson?.message === 'string' && errJson.message.trim()) {
+                            message = errJson.message;
+                        }
+                    } else {
+                        const errText = await res.text();
+                        if (typeof errText === 'string' && errText.trim()) {
+                            message = `Search failed (HTTP ${res.status}).`;
+                        }
+                    }
+                } catch {
+                    // ignore parse errors
+                }
+                setGlobalResults([]);
+                setGlobalError(message);
+                return;
+            }
+
+            const data = await res.json();
+            const users: GlobalUserSearchResult[] = Array.isArray(data)
+                ? data
+                : Array.isArray(data?.users)
+                    ? data.users
+                    : [];
+            setGlobalResults(users);
+        } catch (err: any) {
+            setGlobalResults([]);
+            setGlobalError(typeof err?.message === 'string' ? err.message : 'Search failed.');
+        } finally {
+            setGlobalSearching(false);
+        }
+    };
+
+    useEffect(() => {
+        if (searchMode !== 'global') return;
+
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(() => {
+            void runGlobalSearch(query);
+        }, 320);
+
+        return () => {
+            if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        };
+    }, [query, searchMode]);
+
+    const filteredChats: ChatListItem[] = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return ChatBar;
+        return ChatBar.filter((item) => {
+            const haystack = `${String(item.name ?? '')} ${String(item.lastMessage ?? '')}`.toLowerCase();
+            return haystack.includes(q);
+        });
+    }, [query]);
+
+    const globalAsChatRows: ChatListItem[] = useMemo(() => {
+        return globalResults.map((u, index) => {
+            const id = String(u.id ?? u._id ?? index);
+            const username = String(u.username ?? u.name ?? '').trim();
+            const email = typeof u.email === 'string' ? u.email.trim() : '';
+            return {
+                id,
+                name: username || email || 'User',
+                lastMessage: email || 'Tap to chat',
+                Date: '',
+            };
+        });
+    }, [globalResults]);
+
+    const dataToRender = showingGlobal ? globalAsChatRows : filteredChats;
+
+    const ListEmpty = () => (
+        <View style={styles.emptyWrap}>
+            <Text style={styles.emptyTitle}>
+                {showingGlobal
+                    ? globalSearching
+                        ? 'Searching…'
+                        : globalError
+                            ? 'Search failed'
+                            : 'No users found'
+                    : query.trim()
+                        ? 'No chats found'
+                        : 'No chats yet'}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+                {showingGlobal
+                    ? globalError
+                        ? globalError
+                        : globalSearching
+                            ? 'Looking for users…'
+                            : 'Try a different search term.'
+                    : query.trim()
+                        ? 'Try a different search term.'
+                        : 'Start a conversation to see it here.'}
+            </Text>
+        </View>
+    );
+
+    const renderItem = ({ item }: { item: ChatListItem }) => (
+        <ChatRow
+            item={item}
+            onPress={() => navigation.navigate('Chatroom')}
+        />
+    );
 
     return (  
         <SafeAreaView style={styles.container} edges={['top']}>
-            <View style = {styles.header}>
+            <View style={[styles.header, { paddingHorizontal: horizontalSafePad }]}>
                 <Text style={styles.headerTitle}>TalkNow</Text>
                 <Pressable>
                     {/* menu button placeholder */}
                 </Pressable>
             </View>
 
-            <View style={styles.searchWrap}>
-                <View
+            <View style={[styles.searchWrap, { paddingHorizontal: horizontalSafePad }]}>
+                <Animated.View
                     style={[
                         styles.searchbar,
-                        searchMode === 'global' ? styles.searchbarGlobal : styles.searchbarLocal,
+                        {
+                            transform: [
+                                {
+                                    scale: focusAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
+                                },
+                            ],
+                        },
                     ]}
-                    onLayout={(e) => setSearchWidth(e.nativeEvent.layout.width)}
                 >
-                    {searchMode === 'global' && searchWidth > 0 ? (
-                        <View pointerEvents="none" style={styles.searchScanWrap}>
-                            <Animated.View
+                    <View pointerEvents="none" style={styles.searchbarRingWrap}>
+                        <Animated.View
+                            style={[
+                                styles.searchbarRing,
+                                {
+                                    opacity: focusAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }),
+                                    transform: [
+                                        {
+                                            scale: focusAnim.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }),
+                                        },
+                                    ],
+                                },
+                            ]}
+                        />
+                    </View>
+
+                    <View style={styles.modeToggle}>
+                        <Animated.View
+                            pointerEvents="none"
+                            style={[
+                                styles.modeTogglePill,
+                                {
+                                    transform: [
+                                        {
+                                            translateX: modeAnim.interpolate({
+                                                inputRange: [0, 1],
+                                                outputRange: [0, MODE_TOGGLE_PILL_WIDTH],
+                                            }),
+                                        },
+                                    ],
+                                },
+                            ]}
+                        />
+
+                        <Pressable
+                            onPress={() => {
+                                setSearchMode('local');
+                                setShowingGlobal(false);
+                                setGlobalResults([]);
+                                setGlobalError(null);
+                                searchInputRef.current?.focus();
+                            }}
+                            style={styles.modeToggleButton}
+                            accessibilityRole="button"
+                            accessibilityLabel="Search chats"
+                        >
+                            <Animated.Text
                                 style={[
-                                    styles.searchScanLineTop,
-                                    { width: scanLineWidth, transform: [{ translateX: scanTranslateTop }] },
+                                    styles.modeToggleText,
+                                    {
+                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.7] }),
+                                    },
                                 ]}
-                            />
-                            <Animated.View
+                            >
+                                Chats
+                            </Animated.Text>
+                        </Pressable>
+
+                        <Pressable
+                            onPress={() => {
+                                setSearchMode('global');
+                                setGlobalError(null);
+                                setShowingGlobal(true);
+                                void runGlobalSearch(query);
+                                searchInputRef.current?.focus();
+                            }}
+                            style={styles.modeToggleButton}
+                            accessibilityRole="button"
+                            accessibilityLabel="Search users"
+                        >
+                            <Animated.Text
                                 style={[
-                                    styles.searchScanLineBottom,
-                                    { width: scanLineWidth, transform: [{ translateX: scanTranslateBottom }] },
+                                    styles.modeToggleText,
+                                    {
+                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
+                                    },
                                 ]}
-                            />
-                        </View>
-                    ) : null}
+                            >
+                                Users
+                            </Animated.Text>
+                        </Pressable>
+                    </View>
 
                     <TextInput
-                        placeholder={searchMode === 'global' ? 'Search globally' : 'Search'}
+                        ref={(node) => {
+                            searchInputRef.current = node;
+                        }}
+                        placeholder={searchMode === 'global' ? 'Search users' : 'Search chats'}
                         placeholderTextColor="#666"
                         style={styles.searchInput}
                         value={query}
-                        onChangeText={setQuery}
-                        onFocus={() => setSearchMode('local')}
+                        onChangeText={(text) => {
+                            setQuery(text);
+                            if (searchMode === 'local') {
+                                setShowingGlobal(false);
+                                setGlobalResults([]);
+                                setGlobalError(null);
+                            }
+                        }}
+                        onFocus={() => {
+                            Animated.timing(focusAnim, {
+                                toValue: 1,
+                                duration: 160,
+                                useNativeDriver: true,
+                            }).start();
+                        }}
+                        onBlur={() => {
+                            Animated.timing(focusAnim, {
+                                toValue: 0,
+                                duration: 160,
+                                useNativeDriver: true,
+                            }).start();
+                        }}
                         autoCorrect={false}
                         autoCapitalize="none"
                         clearButtonMode="while-editing"
                         returnKeyType="search"
+                        onSubmitEditing={() => {
+                            if (searchMode === 'global') {
+                                void runGlobalSearch(query);
+                            }
+                        }}
                     />
 
+                    {query.trim().length > 0 ? (
+                        <Pressable
+                            onPress={() => {
+                                setQuery('');
+                                setShowingGlobal(false);
+                                setGlobalResults([]);
+                                setGlobalError(null);
+                                setGlobalSearching(false);
+                                searchInputRef.current?.focus();
+                            }}
+                            style={({ pressed }) => [styles.clearButton, pressed && styles.rowPressed]}
+                            android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
+                            hitSlop={10}
+                            accessibilityRole="button"
+                            accessibilityLabel="Clear search"
+                        >
+                            <Ionicons name="close" size={18} color="#6733d0" />
+                        </Pressable>
+                    ) : null}
+
                     <Pressable
-                        onPress={() => setSearchMode((m) => (m === 'global' ? 'local' : 'global'))}
+                        onPress={() => {
+                            if (searchMode === 'global') {
+                                void runGlobalSearch(query);
+                            } else {
+                                searchInputRef.current?.focus();
+                            }
+                        }}
                         style={({ pressed }) => [styles.searchIconButton, pressed && styles.rowPressed]}
                         android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
                         hitSlop={10}
                         accessibilityRole="button"
-                        accessibilityLabel={searchMode === 'global' ? 'Switch to local search' : 'Switch to global search'}
+                        accessibilityLabel="Search"
                     >
                         <Animated.View
                             style={{
-                                opacity: iconPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
                                 transform: [
                                     {
-                                        scale: iconPulse.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.05] }),
+                                        rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }),
                                     },
                                 ],
+                                opacity:
+                                    searchMode === 'global'
+                                        ? globalSearching
+                                            ? 0.9
+                                            : 1
+                                        : 0.85,
                             }}
                         >
                             <Ionicons name="search" size={20} color="#6733d0" />
                         </Animated.View>
                     </Pressable>
-                </View>
+                </Animated.View>
             </View>
-
             <FlatList
-
-                data={filteredChats}
+                data={dataToRender}
                 keyExtractor={(item, index) => String(item.id ?? index)}
                 renderItem={renderItem}
                 style={styles.list}
@@ -188,9 +609,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 ListEmptyComponent={ListEmpty}
                 showsVerticalScrollIndicator={false}
             />
-
         </SafeAreaView>
-
     );
 };
 const styles = StyleSheet.create({
@@ -201,7 +620,7 @@ const styles = StyleSheet.create({
     header: {
         width: '100%',
         height: 56,
-        backgroundColor: '#6733d0',
+        backgroundColor: '#fff',
         top: 0,
         left: 0,
         right: 0,
@@ -212,12 +631,16 @@ const styles = StyleSheet.create({
         paddingHorizontal: 12,
     },
     headerTitle: {
-        color: '#fff',
-        fontSize: 18,
+        color: '#710b8d',
+        fontSize: 26,
         fontWeight: '600',
+        marginLeft: 4,
+    },
+    rowPressed: {
+        backgroundColor: 'rgba(233,226,255,0.42)',
     },
     headerSubtitle: {
-        color: '#fff',
+        color: '#710b8d',
         fontSize: 12,
         opacity: 0.9,
     },
@@ -231,30 +654,84 @@ const styles = StyleSheet.create({
     searchbar: {
         width: '100%',
         maxWidth: 420,
-        minHeight: 40,
+        minHeight: 44,
         borderWidth: 1,
+        borderColor: '#350d81',
         borderRadius: 30,
-        paddingLeft: 15,
+        paddingLeft: 10,
         paddingRight: 6,
         backgroundColor: '#fff',
         flexDirection: 'row',
         alignItems: 'center',
         overflow: 'hidden',
-    }
-    ,
-    searchbarLocal: {
-        borderColor: '#350d81',
+        position: 'relative',
     },
-    searchbarGlobal: {
-        borderColor: '#6733d0',
+    searchbarRingWrap: {
+        ...StyleSheet.absoluteFillObject,
+        padding: 0,
+        alignItems: 'stretch',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+    },
+    searchbarRing: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: 30,
         borderWidth: 2,
+        borderColor: '#6733d0',
+    },
+    modeToggle: {
+        height: 32,
+        width: MODE_TOGGLE_WIDTH,
+        borderRadius: 16,
+        backgroundColor: '#e9e2ff',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+        padding: MODE_TOGGLE_PADDING,
+        position: 'relative',
+    },
+    modeTogglePill: {
+        position: 'absolute',
+        top: MODE_TOGGLE_PADDING,
+        left: MODE_TOGGLE_PADDING,
+        width: MODE_TOGGLE_PILL_WIDTH,
+        height: 28,
+        borderRadius: 14,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: 'rgba(53,13,129,0.18)',
+    },
+    modeToggleButton: {
+        flex: 1,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+    },
+    modeToggleText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#350d81',
+        textAlign: 'center',
+        includeFontPadding: false,
     },
     searchInput: {
         flex: 1,
-        height: 40,
+        height: 44,
         paddingVertical: 0,
         paddingRight: 10,
         color: '#111',
+    },
+    clearButton: {
+        width: 32,
+        height: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 16,
+        overflow: 'hidden',
+        marginRight: 2,
     },
     searchIconButton: {
         width: 36,
@@ -264,29 +741,6 @@ const styles = StyleSheet.create({
         borderRadius: 18,
         overflow: 'hidden',
     },
-    searchScanWrap: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: 0,
-        bottom: 0,
-    },
-    searchScanLineTop: {
-        position: 'absolute',
-        top: 0,
-        height: 2,
-        borderRadius: 1,
-        backgroundColor: '#6733d0',
-        opacity: 0.9,
-    },
-    searchScanLineBottom: {
-        position: 'absolute',
-        bottom: 0,
-        height: 2,
-        borderRadius: 1,
-        backgroundColor: '#6733d0',
-        opacity: 0.55,
-    },
     list: {
         flex: 1,
         width: '100%',
@@ -294,20 +748,20 @@ const styles = StyleSheet.create({
     listContent: {
         paddingTop: 8,
         paddingBottom: 14,
-        alignItems: 'center',
     },
     row: {
         width: '100%',
-        maxWidth: 420,
         flexDirection: 'row',
         alignItems: 'center',
         paddingVertical: 12,
-        paddingHorizontal: 10,
+        paddingHorizontal: 12,
         borderBottomWidth: 1,
         borderBottomColor: '#eee',
+        position: 'relative',
+        overflow: 'hidden',
     },
-    rowPressed: {
-        opacity: 0.75,
+    rippleLayer: {
+        ...StyleSheet.absoluteFillObject,
     },
     avatar: {
         width: 48,
@@ -330,11 +784,12 @@ const styles = StyleSheet.create({
     rowTop: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
         marginBottom: 2,
+        minWidth: 0,
     },
     name: {
         flex: 1,
+        flexShrink: 1,
         fontSize: 16,
         fontWeight: '600',
         marginRight: 8,
@@ -342,15 +797,19 @@ const styles = StyleSheet.create({
     time: {
         fontSize: 12,
         color: '#666',
+        flexShrink: 0,
+        textAlign: 'right',
     },
     lastMessage: {
         fontSize: 13,
         color: '#666',
+        flexShrink: 1,
     },
 
     emptyWrap: {
         width: '100%',
-        maxWidth: 420,
+        maxWidth: 520,
+        alignSelf: 'center',
         paddingHorizontal: 16,
         paddingTop: 28,
         alignItems: 'center',

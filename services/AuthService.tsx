@@ -52,6 +52,17 @@ export const getAuthErrorMessage = (error: unknown, fallbackMessage: string) => 
         const data = error.response?.data as any;
         const serverMessage = typeof data?.message === 'string' ? data.message : '';
 
+        // Some endpoints return a generic `message` with a more specific `error`.
+        // Prefer the specific error so users get actionable feedback.
+        const detailedError = typeof data?.error === 'string' ? data.error : '';
+        const genericServerMessage = serverMessage.trim().toLowerCase();
+        if (
+            detailedError.trim().length > 0 &&
+            (genericServerMessage === 'server error' || genericServerMessage === 'internal server error')
+        ) {
+            return detailedError;
+        }
+
         if (serverMessage.trim().length > 0) return serverMessage;
 
         // No response usually means network / DNS / CORS / wrong API URL.

@@ -1,4 +1,5 @@
 {
+  "$schema": "./expo-app.schema.json",
   "expo": {
     "name": "TalkNow",
     "slug": "TalkNow",

@@ -1,17 +1,42 @@
 import Chatroom from '@/app/components/chatroom';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { CardStyleInterpolators, createStackNavigator } from '@react-navigation/stack';
 import React from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Easing, View } from 'react-native';
 import HomePage from '../../app/MainScreen/tabs';
 import useAuth from '../../hooks/useAuth';
 import AuthNavigator from './AuthNavigator';
-const Stack = createNativeStackNavigator();
+const Stack = createStackNavigator();
 
 const MainNavigator = () => {
     return (
         <Stack.Navigator screenOptions={{ headerShown: false }}>
             <Stack.Screen name="HomePage" component={HomePage} />
-            <Stack.Screen name="Chatroom" component={Chatroom} />
+            <Stack.Screen
+                name="Chatroom"
+                component={Chatroom}
+                options={{
+                    gestureEnabled: true,
+                    gestureDirection: 'horizontal',
+                    cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+                    cardStyle: { backgroundColor: '#fff' },
+                    transitionSpec: {
+                        open: {
+                            animation: 'timing',
+                            config: {
+                                duration: 220,
+                                easing: Easing.out(Easing.poly(4)),
+                            },
+                        },
+                        close: {
+                            animation: 'timing',
+                            config: {
+                                duration: 200,
+                                easing: Easing.out(Easing.poly(4)),
+                            },
+                        },
+                    },
+                }}
+            />
         </Stack.Navigator>
     );
 };

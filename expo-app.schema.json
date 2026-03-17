@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TalkNow (relaxed Expo app.json schema)",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "expo": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "newArchEnabled": { "type": "boolean" },
+        "android": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "usesCleartextTraffic": { "type": "boolean" },
+            "edgeToEdgeEnabled": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}

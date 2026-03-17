@@ -3,16 +3,25 @@ const axios = require('axios');
 const BREVO_URL = 'https://api.brevo.com/v3/smtp/email';
 
 const sendOtp = async (email, otp) => {
-  if (!process.env.BREVO_API_KEY) {
-    throw new Error('BREVO_API_KEY is not set in environment variables.');
-  }
+  const isProduction = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 
   const senderName = process.env.BREVO_SENDER_NAME || 'TalkNow';
   const senderEmail = process.env.BREVO_SENDER_EMAIL;
-  if (!senderEmail) {
-    throw new Error(
-      'BREVO_SENDER_EMAIL is not set. Configure a verified sender email in Brevo and set BREVO_SENDER_EMAIL in your environment.'
-    );
+
+  // In production we require Brevo to be configured.
+  // In development, allow OTP flow to work without email by logging the OTP.
+  if (!process.env.BREVO_API_KEY || !senderEmail) {
+    const msg = !process.env.BREVO_API_KEY
+      ? 'BREVO_API_KEY is not set. Set it in your backend environment variables (Brevo API key required to send OTP emails).'
+      : 'BREVO_SENDER_EMAIL is not set. Set it to a verified sender email address in your backend environment variables.';
+
+    if (isProduction) {
+      throw new Error(msg);
+    }
+
+    console.warn(`[otpService] ${msg} (dev fallback: logging OTP instead)`);
+    console.warn(`[otpService] OTP for ${email}: ${otp}`);
+    return { messageId: 'dev-fallback', dev: true };
   }
 
   const payload = {
