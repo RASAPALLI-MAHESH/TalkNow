@@ -2,39 +2,49 @@ import ChatBar from '@/app/components/chatbar';
 import useAuth from '@/hooks/useAuth';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import React from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 const ChatsScreen = () => {
     const { user } = useAuth();
     useWebSocketClient();
+
+    const renderItem = ({ item }: { item: (typeof ChatBar)[number] }) => (
+        <Pressable style={styles.row}>
+            <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
+            </View>
+
+            <View style={styles.rowContent}>
+                <View style={styles.rowTop}>
+                    <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.time} numberOfLines={1}>{String(item.Date ?? '').slice(0, 10)}</Text>
+                </View>
+                <Text style={styles.lastMessage} numberOfLines={1}>{item.lastMessage}</Text>
+            </View>
+        </Pressable>
+    );
+
     return (  
         <View style= {styles.container}>
             <View style = {styles.header}>
                 <Text style={styles.headerTitle}>TalkNow</Text>
                 <Text style={styles.headerSubtitle}>{user?.username ?? ''}</Text>
                 <Pressable>
-                    {/* <Button title="menu" onPress={() => navigation.navigate('go-back')} /> */}
+                    {/* menu button placeholder */}
                 </Pressable>
             </View>
-            <View>
+
+            <View style={styles.searchWrap}>
                 <TextInput placeholder='Search' style={styles.searchbar} />
             </View>
-            <View style={{ marginTop: 20 }}>
-                {ChatBar.map((chat, index) => (
-                    <Pressable key={chat.id || String(index)} style={styles.row}>
-                        <View style={styles.avatar}>
-                            <Text style={styles.avatarText}>{String(chat.name || '?').slice(0, 1).toUpperCase()}</Text>
-                        </View>
 
-                        <View style={styles.rowContent}>
-                            <View style={styles.rowTop}>
-                                <Text style={styles.name} numberOfLines={1}>{chat.name}</Text>
-                                <Text style={styles.time} numberOfLines={1}>{String(chat.Date ?? '').slice(0, 10)}</Text>
-                            </View>
-                            <Text style={styles.lastMessage} numberOfLines={1}>{chat.lastMessage}</Text>
-                        </View>
-                    </Pressable>
-                ))}
-            </View>
+            <FlatList
+                data={ChatBar}
+                keyExtractor={(item, index) => String(item.id ?? index)}
+                renderItem={renderItem}
+                style={styles.list}
+                contentContainerStyle={styles.listContent}
+                keyboardShouldPersistTaps="handled"
+            />
 
         </View>
 
@@ -43,7 +53,6 @@ const ChatsScreen = () => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        alignItems: 'center',
         backgroundColor: '#fff',
     },
     header: {
@@ -69,8 +78,13 @@ const styles = StyleSheet.create({
         fontSize: 12,
         opacity: 0.9,
     },
+    searchWrap: {
+        width: '100%',
+        alignItems: 'center',
+    },
     searchbar: {
-        width: 400,
+        width: '100%',
+        maxWidth: 420,
         height: 40,
         borderColor: '#350d81',
         borderWidth: 1,
@@ -79,8 +93,18 @@ const styles = StyleSheet.create({
         marginTop: 10,
     }
     ,
+    list: {
+        flex: 1,
+        width: '100%',
+    },
+    listContent: {
+        paddingTop: 20,
+        paddingBottom: 10,
+        alignItems: 'center',
+    },
     row: {
-        width: 400,
+        width: '100%',
+        maxWidth: 420,
         flexDirection: 'row',
         alignItems: 'center',
         paddingVertical: 12,
