@@ -1,14 +1,21 @@
 import ChatBar from '@/app/components/chatbar';
-import useAuth from '@/hooks/useAuth';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import React from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-const ChatsScreen = () => {
-    const { user } = useAuth();
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+const formatChatTime = (raw?: string) => {
+    if (!raw) return '';
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
+
+const ChatsScreen = ({ navigation }: { navigation: any }) => {
     useWebSocketClient();
 
     const renderItem = ({ item }: { item: (typeof ChatBar)[number] }) => (
-        <Pressable style={styles.row}>
+        <Pressable style={styles.row} onPress={() => navigation.navigate('Chatroom')}>
             <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
             </View>
@@ -16,7 +23,7 @@ const ChatsScreen = () => {
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
                     <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.time} numberOfLines={1}>{String(item.Date ?? '').slice(0, 10)}</Text>
+                    <Text style={styles.time} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
                 </View>
                 <Text style={styles.lastMessage} numberOfLines={1}>{item.lastMessage}</Text>
             </View>
@@ -24,10 +31,9 @@ const ChatsScreen = () => {
     );
 
     return (  
-        <View style= {styles.container}>
+        <SafeAreaView style={styles.container} edges={['top']}>
             <View style = {styles.header}>
                 <Text style={styles.headerTitle}>TalkNow</Text>
-                <Text style={styles.headerSubtitle}>{user?.username ?? ''}</Text>
                 <Pressable>
                     {/* menu button placeholder */}
                 </Pressable>
@@ -38,6 +44,7 @@ const ChatsScreen = () => {
             </View>
 
             <FlatList
+            
                 data={ChatBar}
                 keyExtractor={(item, index) => String(item.id ?? index)}
                 renderItem={renderItem}
@@ -46,7 +53,7 @@ const ChatsScreen = () => {
                 keyboardShouldPersistTaps="handled"
             />
 
-        </View>
+        </SafeAreaView>
 
     );
 };

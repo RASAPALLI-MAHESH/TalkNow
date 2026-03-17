@@ -36,6 +36,9 @@ yarn-error.*
 .env*.local
 !.env.example
 
+# scratch / reference files
+backend/services/WebSocket_backend_ref
+
 # typescript
 *.tsbuildinfo
 

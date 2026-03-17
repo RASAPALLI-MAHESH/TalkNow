@@ -18,7 +18,7 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 const MainTabs = () => {
     return (
         <Tab.Navigator screenOptions={{ headerShown: false }}>
-            <Tab.Screen name="Chats" component={ChatsScreen} />
+            <Tab.Screen name="Chats" component={ChatsScreen}/>
             <Tab.Screen name="Status" component={StatusScreen} />
             <Tab.Screen name="AI" component={AIScreen} />
             <Tab.Screen name="Settings" component={SettingsScreen} />

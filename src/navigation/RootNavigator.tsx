@@ -1,16 +1,17 @@
+import Chatroom from '@/app/components/chatroom';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import HomePage from '../../app/MainScreen/tabs';
 import useAuth from '../../hooks/useAuth';
 import AuthNavigator from './AuthNavigator';
-
 const Stack = createNativeStackNavigator();
 
 const MainNavigator = () => {
     return (
-        <Stack.Navigator screenOptions={{ headerTitleAlign: 'center', headerTintColor: '#fff', headerStyle: { backgroundColor: '#0d4d47' } }}>
-            <Stack.Screen name="HomePage" component={HomePage} options={{ title: 'TalkNow' }} />
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="HomePage" component={HomePage} />
+            <Stack.Screen name="Chatroom" component={Chatroom} />
         </Stack.Navigator>
     );
 };
