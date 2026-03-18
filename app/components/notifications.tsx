@@ -119,6 +119,8 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                 fromUserId: typeof notification?.fromUserId === 'string' ? notification.fromUserId : undefined,
             };
 
+            console.log('notification received:', { apiOrigin, normalized });
+
             setItems((prev) => [normalized, ...prev]);
         });
 

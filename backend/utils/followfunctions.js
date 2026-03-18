@@ -93,10 +93,20 @@ const followUser = async (req, res) => {
             };
 
             const room = getUserRoom(targetUserId);
+            // Helpful diagnostics: see whether the receiver is actually connected/registered.
+            let roomSize = undefined;
+            try {
+                const sockets = await io.in(room).allSockets();
+                roomSize = sockets?.size;
+            } catch {
+                // ignore
+            }
+
             io.to(room).emit('new_notification', payload);
             console.log('[notifications] emitted follow notification', {
                 toUserId: String(targetUserId),
                 room,
+                roomSize,
                 fromUserId: String(userId),
             });
         }
