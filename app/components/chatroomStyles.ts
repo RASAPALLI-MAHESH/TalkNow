@@ -12,7 +12,7 @@ const styles = StyleSheet.create({
     header: {
         width: '100%',
         height: 56,
-        backgroundColor: '#a0a0a0',
+        backgroundColor: '#ffffff',
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 12,
@@ -26,12 +26,17 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
     },
     headerButtonText: {
-        color: '#351a48',
+        color: '#ae98d9',
         fontSize: 14,
         fontWeight: '800',
     },
     pressed: {
-        opacity: 0.7,
+        backgroundColor: '#ae98d9',
+        shadowColor: '#bbb0d2',
+        shadowOpacity: 0.28,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 0 },
+        elevation: 3,
     },
     avatarButton: {
         width: 36,
@@ -50,7 +55,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
     },
     headerTitle: {
-        color: '#6e4576',
+        color: '#030303',
         fontSize: 16,
         fontWeight: '700',
     },

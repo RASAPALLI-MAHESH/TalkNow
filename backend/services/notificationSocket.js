@@ -14,11 +14,18 @@ const initializeNotificationSocket = (httpServer) => {
     io.on('connection', (socket) => {
         console.log('A user connected to the notification socket:', socket.id);
 
-        socket.on('register', (userId) => {
+        socket.on('register', (userId, ack) => {
             const normalized = String(userId || '').trim();
-            if (!normalized) return;
+            if (!normalized) {
+                if (typeof ack === 'function') ack({ ok: false, message: 'Missing userId' });
+                return;
+            }
             OnlineUsers.set(normalized, socket.id);
             console.log(`User ${normalized} registered with socket ID ${socket.id}`);
+
+            if (typeof ack === 'function') {
+                ack({ ok: true, userId: normalized, socketId: socket.id });
+            }
         });
 
         socket.on('disconnect', () => {

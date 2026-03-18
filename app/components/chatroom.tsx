@@ -80,14 +80,14 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                                 style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
                                 android_ripple={
                                     Platform.OS === 'android'
-                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        ? { color: 'rgba(103,51,208,0.22)', foreground: true }
                                         : undefined
                                 }
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel="Go back"
                             >
-                                <Ionicons name="arrow-back" size={22} color="#fff" />
+                                <Ionicons name="arrow-back" size={22} color="#000" />
                             </Pressable>
 
                             <Pressable
@@ -95,7 +95,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                                 style={({ pressed }) => [styles.avatarButton, pressed && styles.pressed]}
                                 android_ripple={
                                     Platform.OS === 'android'
-                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        ? { color: 'rgba(103,51,208,0.22)', foreground: true }
                                         : undefined
                                 }
                                 hitSlop={10}
@@ -119,7 +119,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                                 style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
                                 android_ripple={
                                     Platform.OS === 'android'
-                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        ? { color: 'rgba(103,51,208,0.22)', foreground: true }
                                         : undefined
                                 }
                                 hitSlop={10}
@@ -136,14 +136,14 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                                 style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
                                 android_ripple={
                                     Platform.OS === 'android'
-                                        ? { color: 'rgba(255,255,255,0.22)', foreground: true }
+                                        ? { color: 'rgba(103,51,208,0.22)', foreground: true }
                                         : undefined
                                 }
                                 hitSlop={10}
                                 accessibilityRole="button"
                                 accessibilityLabel="More options"
                             >
-                                <Ionicons name="ellipsis-vertical" size={20} color="#fff" />
+                                <Ionicons name="ellipsis-vertical" size={20} color="#000" />
                             </Pressable>
                         </View>
 

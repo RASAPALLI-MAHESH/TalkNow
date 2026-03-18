@@ -52,17 +52,21 @@ const normalizeApiOrigin = (rawUrl: string) => {
     const withoutAuth = withScheme.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
     const base = withoutAuth.replace(/\/$/, '');
 
+    // Common deployment mistake: using https with :8080. Render serves 443 externally.
+    // Strip :8080 for non-local https URLs.
+    const stripped8080 = base.replace(/^(https:\/\/[^/]+):8080(\/|$)/i, '$1$2');
+
     // If you're pointing at Render with an http URL, Socket.IO polling can fail
     // due to redirects. Upgrade to https for non-local hosts with no explicit port.
     if (
-        base.startsWith('http://') &&
-        !base.includes('localhost') &&
-        !base.includes('127.0.0.1') &&
-        !/:\d+$/.test(base)
+        stripped8080.startsWith('http://') &&
+        !stripped8080.includes('localhost') &&
+        !stripped8080.includes('127.0.0.1') &&
+        !/:\d+$/.test(stripped8080)
     ) {
-        return `https://${base.slice('http://'.length)}`;
+        return `https://${stripped8080.slice('http://'.length)}`;
     }
-    return base;
+    return stripped8080;
 };
 
 const Notifications = ({ navigation }: { navigation: any }) => {
@@ -75,24 +79,38 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
     useEffect(() => {
         const socket = io(apiOrigin, {
-            // Render/proxies often fail websocket upgrades from mobile clients.
-            // Polling is the most reliable transport here.
-            transports: ['polling'],
-            upgrade: false,
+            // Allow both; some networks break websocket, others break polling.
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            rememberUpgrade: true,
             path: '/socket.io',
             reconnection: true,
-            timeout: 10000,
+            timeout: 20000,
         });
         socketRef.current = socket;
 
         const register = () => {
             if (currentUserId) {
-                socket.emit('register', currentUserId);
+                socket.timeout(5000).emit('register', currentUserId, (err: any, res: any) => {
+                    if (err) {
+                        console.log('notification socket register timeout/error:', { apiOrigin, err });
+                        return;
+                    }
+                    console.log('notification socket registered:', { apiOrigin, res });
+                });
             }
         };
 //connect and reconnect events are emitted by the socket when a connection is established or re-established, respectively. We listen for these events to register the user with the server whenever a connection is made.
         socket.on('connect', register);
     // Note: 'connect' fires on initial connect and reconnects.
+
+        socket.on('connect', () => {
+            console.log('notification socket connected:', { apiOrigin, socketId: socket.id });
+        });
+
+        socket.on('disconnect', (reason: any) => {
+            console.log('notification socket disconnected:', { apiOrigin, reason });
+        });
 
         socket.on('connect_error', (err: any) => {
             console.log('notification socket connect_error:', {

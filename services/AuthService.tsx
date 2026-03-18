@@ -113,8 +113,13 @@ const upgradeHttpToHttpsForRemote = (url: string) => {
     return url;
 };
 
+const stripRemoteHttpsPort8080 = (url: string) => {
+    // Render serves HTTPS on 443 externally; including :8080 breaks clients.
+    return url.replace(/^(https:\/\/[^/]+):8080(\/|$)/i, '$1$2');
+};
+
 const normalizeAuthBaseUrl = (rawUrl: string) => {
-    const base = upgradeHttpToHttpsForRemote(withHttpScheme(rawUrl));
+    const base = stripRemoteHttpsPort8080(upgradeHttpToHttpsForRemote(withHttpScheme(rawUrl)));
     const trimmed = base.replace(/\/$/, '');
     if (trimmed.endsWith('/api/auth')) return trimmed;
     if (trimmed.endsWith('/api')) return `${trimmed}/auth`;
