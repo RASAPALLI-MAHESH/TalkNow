@@ -312,7 +312,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 : Array.isArray(data?.users)
                     ? data.users
                     : [];
-            setGlobalResults(users);
+            const sanitized = users.map((u) => ({
+                id: u.id,
+                _id: u._id,
+                username: u.username,
+            }));
+            setGlobalResults(sanitized);
         } catch (err: any) {
             setGlobalResults([]);
             setGlobalError(typeof err?.message === 'string' ? err.message : 'Search failed.');
