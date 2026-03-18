@@ -79,10 +79,10 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
     useEffect(() => {
         const socket = io(apiOrigin, {
-            // Allow both; some networks break websocket, others break polling.
-            transports: ['websocket', 'polling'],
-            upgrade: true,
-            rememberUpgrade: true,
+            // Render/proxies often fail websocket upgrades from mobile clients.
+            // Polling is the most reliable transport here.
+            transports: ['polling'],
+            upgrade: false,
             path: '/socket.io',
             reconnection: true,
             timeout: 20000,
