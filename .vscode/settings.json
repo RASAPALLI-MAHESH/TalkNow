@@ -4,5 +4,13 @@
     "source.organizeImports": "explicit",
     "source.sortMembers": "explicit"
   },
-  "typescript.tsserver.experimental.enableProjectDiagnostics": false
+  "typescript.tsserver.experimental.enableProjectDiagnostics": false,
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "/app.json"
+      ],
+      "url": "./expo-app.schema.json"
+    }
+  ]
 }

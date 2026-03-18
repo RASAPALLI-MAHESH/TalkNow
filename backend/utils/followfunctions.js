@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const User = require('../models/user');
-const { OnlineUsers, getIo } = require('../services/notificationSocket');
+const { OnlineUsers, getIo, getUserRoom } = require('../services/notificationSocket');
 
 // These handlers are meant to be mounted from backend/routes/authRoutes.js
 // with authMiddleware so req.user.id is available.
@@ -79,8 +79,8 @@ const followUser = async (req, res) => {
         await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: userId } });
 
         // Emit real-time notification if the user is online.
-        const targetSocketId = OnlineUsers.get(String(targetUserId));
-        if (targetSocketId) {
+        const online = OnlineUsers.get(String(targetUserId));
+        if (online && (online.size ? online.size > 0 : true)) {
             const actor = await User.findById(userId).select('_id username');
             const payload = {
                 id: `${Date.now()}-${String(userId)}`,
@@ -93,7 +93,7 @@ const followUser = async (req, res) => {
 
             const io = getIo();
             if (io) {
-                io.to(targetSocketId).emit('new_notification', payload);
+                io.to(getUserRoom(targetUserId)).emit('new_notification', payload);
             }
         }
 
