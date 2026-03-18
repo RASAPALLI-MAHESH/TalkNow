@@ -1,7 +1,8 @@
 import Chatroom from '@/app/components/chatroom';
-import { CardStyleInterpolators, createStackNavigator } from '@react-navigation/stack';
+import Notifications from '@/app/components/notifications';
+import { createStackNavigator } from '@react-navigation/stack';
 import React from 'react';
-import { ActivityIndicator, Easing, View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 import HomePage from '../../app/MainScreen/tabs';
 import useAuth from '../../hooks/useAuth';
 import AuthNavigator from './AuthNavigator';
@@ -14,29 +15,30 @@ const MainNavigator = () => {
             <Stack.Screen
                 name="Chatroom"
                 component={Chatroom}
-                options={{
-                    gestureEnabled: true,
-                    gestureDirection: 'horizontal',
-                    cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
-                    cardStyle: { backgroundColor: '#fff' },
-                    transitionSpec: {
-                        open: {
-                            animation: 'timing',
-                            config: {
-                                duration: 220,
-                                easing: Easing.out(Easing.poly(4)),
-                            },
-                        },
-                        close: {
-                            animation: 'timing',
-                            config: {
-                                duration: 200,
-                                easing: Easing.out(Easing.poly(4)),
-                            },
-                        },
-                    },
-                }}
+                // options={{
+                //     gestureEnabled: true,
+                //     gestureDirection: 'horizontal',
+                //     cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+                //     cardStyle: { backgroundColor: '#fff' },
+                //     transitionSpec: {
+                //         open: {
+                //             animation: 'timing',
+                //             config: {
+                //                 duration: 100,
+                //                 easing: Easing.out(Easing.poly(4)),
+                //             },
+                //         },
+                //         close: {
+                //             animation: 'timing',
+                //             config: {
+                //                 duration: 100,
+                //                 easing: Easing.out(Easing.poly(4)),
+                //             },
+                //         },
+                //     },
+                // }}
             />
+            <Stack.Screen name="Notifications" component={Notifications} />
         </Stack.Navigator>
     );
 };

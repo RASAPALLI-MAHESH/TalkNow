@@ -5,8 +5,11 @@ export type ChatListItem = {
   Date: string;
 };
 
-// Global search rows follow the same shape as normal chat rows.
-export type GlobalChatListItem = ChatListItem;
+// Global search rows are username-only.
+export type GlobalChatListItem = {
+  id: string;
+  name: string;
+};
 
 // Simple in-memory chat list used by ChatsScreen.
 // (Replace with real backend data later.)

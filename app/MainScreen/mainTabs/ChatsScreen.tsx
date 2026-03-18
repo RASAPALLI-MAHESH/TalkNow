@@ -1,4 +1,6 @@
 import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
+import useAuth from '@/hooks/useAuth';
+import { followUser, getAuthErrorMessage, unfollowUser } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -62,11 +64,19 @@ const normalizeApiOrigin = (rawUrl: string) => {
     const withoutAuth = trimmed.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
     return withoutAuth.replace(/\/$/, '');
 };
+
+type ChatRowAction = {
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    variant?: 'primary' | 'ghost';
+};
+
 const ChatRow = ({
     item,
     onPress,
 }: {
-    item: GlobalChatListItem;
+    item: ChatListItem;
     onPress: () => void;
 }) => {
     const [layout, setLayout] = useState({ width: 0, height: 0 });
@@ -201,14 +211,66 @@ const ChatRow = ({
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
                     <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.time} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
                 </View>
+                <Text style={styles.lastMessage} numberOfLines={1}>{item.lastMessage}</Text>
             </View>
         </Pressable>
     );
 };
 
+const GlobalChatRow = ({
+    item,
+    action,
+}: {
+    item: GlobalChatListItem;
+    action: ChatRowAction;
+}) => {
+    const variant = action.variant ?? 'ghost';
+    return (
+        <View style={styles.row}>
+            <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
+            </View>
+
+            <View style={styles.rowContent}>
+                <View style={styles.rowTop}>
+                    <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+                </View>
+            </View>
+
+            <Pressable
+                onPress={action.onPress}
+                disabled={action.disabled}
+                style={({ pressed }) => [
+                    styles.followButton,
+                    variant === 'primary' ? styles.followButtonPrimary : styles.followButtonGhost,
+                    action.disabled && styles.followButtonDisabled,
+                    pressed && !action.disabled && (variant === 'primary' ? styles.followButtonPressedPrimary : styles.followButtonPressed),
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={action.label}
+                hitSlop={10}
+            >
+                <Text
+                    style={[
+                        styles.followButtonText,
+                        variant === 'primary' ? styles.followButtonTextPrimary : styles.followButtonTextGhost,
+                        action.disabled && styles.followButtonTextDisabled,
+                    ]}
+                >
+                    {action.label}
+                </Text>
+            </Pressable>
+        </View>
+    );
+};
+
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
     useWebSocketClient();
+
+    const { user } = useAuth();
+    const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
 
     const insets = useSafeAreaInsets();
     const horizontalSafePad = 12 + Math.max(insets.left, insets.right);
@@ -220,6 +282,9 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const [globalError, setGlobalError] = useState<string | null>(null);
     const [globalResults, setGlobalResults] = useState<GlobalUserSearchResult[]>([]);
     const [showingGlobal, setShowingGlobal] = useState(false);
+
+    const [followingById, setFollowingById] = useState<Record<string, boolean>>({});
+    const [followPendingById, setFollowPendingById] = useState<Record<string, boolean>>({});
 
     const searchInputRef = useRef<TextInput | null>(null);
     const focusAnim = useRef(new Animated.Value(0)).current;
@@ -355,13 +420,40 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             return {
                 id,
                 name: username || 'User',
-                lastMessage: '',
-                Date: '',
             };
         });
     }, [globalResults]);
 
-    const dataToRender = showingGlobal ? globalAsChatRows : filteredChats;
+    const isFollowing = (targetUserId: string) => !!followingById[targetUserId];
+    const isPending = (targetUserId: string) => !!followPendingById[targetUserId];
+
+    const toggleFollow = async (targetUserId: string) => {
+        if (!targetUserId) return;
+        if (!currentUserId) {
+            setGlobalError('Please login to follow users.');
+            return;
+        }
+        if (targetUserId === currentUserId) return;
+        if (isPending(targetUserId)) return;
+
+        const nextFollowing = !isFollowing(targetUserId);
+
+        setFollowPendingById((prev) => ({ ...prev, [targetUserId]: true }));
+        setFollowingById((prev) => ({ ...prev, [targetUserId]: nextFollowing }));
+
+        try {
+            if (nextFollowing) {
+                await followUser(targetUserId, currentUserId);
+            } else {
+                await unfollowUser(targetUserId, currentUserId);
+            }
+        } catch (err) {
+            setFollowingById((prev) => ({ ...prev, [targetUserId]: !nextFollowing }));
+            setGlobalError(getAuthErrorMessage(err, 'Failed to update follow status.'));
+        } finally {
+            setFollowPendingById((prev) => ({ ...prev, [targetUserId]: false }));
+        }
+    };
 
     const ListEmpty = () => (
         <View style={styles.emptyWrap}>
@@ -390,19 +482,46 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         </View>
     );
 
-    const renderItem = ({ item }: { item: ChatListItem }) => (
+
+    const renderChatItem = ({ item }: { item: ChatListItem }) => (
         <ChatRow
             item={item}
             onPress={() => navigation.navigate('Chatroom')}
         />
     );
 
+    const renderGlobalItem = ({ item }: { item: GlobalChatListItem }) => {
+        const targetUserId = String(item.id ?? '').trim();
+        const pending = targetUserId ? isPending(targetUserId) : false;
+        const following = targetUserId ? isFollowing(targetUserId) : false;
+
+        const action: ChatRowAction = {
+            label: pending ? '...' : following ? 'Following' : 'Follow',
+            onPress: () => {
+                void toggleFollow(targetUserId);
+            },
+            disabled: pending || !targetUserId || !currentUserId || targetUserId === currentUserId,
+            variant: following ? 'ghost' : 'primary',
+        };
+
+        return <GlobalChatRow item={item} action={action} />;
+    };
     return (  
         <SafeAreaView style={styles.container} edges={['top']}>
             <View style={[styles.header, { paddingHorizontal: horizontalSafePad }]}>
                 <Text style={styles.headerTitle}>TalkNow</Text>
-                <Pressable>
-                    {/* menu button placeholder */}
+                <Pressable
+                    style={({ pressed }) => [
+                        styles.notification,
+                        pressed && styles.notificationPressed,
+                    ]}
+                    onPress={() => navigation.navigate('Notifications')}
+                    hitSlop={10}
+                    android_ripple={Platform.OS === 'android' ? { color: 'rgba(103,51,208,0.18)' } : undefined}
+                    accessibilityRole="button"
+                    accessibilityLabel="Notifications"
+                >
+                    <Ionicons name="notifications" size={22} color="#1a1073" />
                 </Pressable>
             </View>
 
@@ -597,17 +716,32 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     </Pressable>
                 </Animated.View>
             </View>
-            <FlatList
-                data={dataToRender}
-                keyExtractor={(item, index) => String(item.id ?? index)}
-                renderItem={renderItem}
-                style={styles.list}
-                contentContainerStyle={styles.listContent}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
-                ListEmptyComponent={ListEmpty}
-                showsVerticalScrollIndicator={false}
-            />
+            {showingGlobal ? (
+                <FlatList
+                    data={globalAsChatRows}
+                    keyExtractor={(item, index) => String(item.id ?? index)}
+                    renderItem={renderGlobalItem}
+                    extraData={{ followingById, followPendingById, currentUserId }}
+                    style={styles.list}
+                    contentContainerStyle={styles.listContent}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    ListEmptyComponent={ListEmpty}
+                    showsVerticalScrollIndicator={false}
+                />
+            ) : (
+                <FlatList
+                    data={filteredChats}
+                    keyExtractor={(item, index) => String(item.id ?? index)}
+                    renderItem={renderChatItem}
+                    style={styles.list}
+                    contentContainerStyle={styles.listContent}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    ListEmptyComponent={ListEmpty}
+                    showsVerticalScrollIndicator={false}
+                />
+            )}
         </SafeAreaView>
     );
 };
@@ -780,6 +914,46 @@ const styles = StyleSheet.create({
         flex: 1,
         minWidth: 0,
     },
+    followButton: {
+        paddingHorizontal: 12,
+        height: 30,
+        borderRadius: 16,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+        marginLeft: 10,
+    },
+    followButtonPrimary: {
+        backgroundColor: '#6733d0',
+        borderColor: '#6733d0',
+    },
+    followButtonGhost: {
+        backgroundColor: '#fff',
+        borderColor: '#6733d0',
+    },
+    followButtonPressed: {
+        backgroundColor: 'rgba(233,226,255,0.42)',
+    },
+    followButtonPressedPrimary: {
+        opacity: 0.88,
+    },
+    followButtonDisabled: {
+        opacity: 0.6,
+    },
+    followButtonText: {
+        fontSize: 12,
+        fontWeight: '800',
+    },
+    followButtonTextPrimary: {
+        color: '#fff',
+    },
+    followButtonTextGhost: {
+        color: '#6733d0',
+    },
+    followButtonTextDisabled: {
+        // Keep same color; opacity is handled by the container.
+    },
     rowTop: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -825,7 +999,18 @@ const styles = StyleSheet.create({
         color: '#666',
         textAlign: 'center',
     },
-
+    notification: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: 'rgba(103,51,208,0.12)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    }
+    ,
+    notificationPressed: {
+        opacity: 0.75,
+    }
 });
 
 

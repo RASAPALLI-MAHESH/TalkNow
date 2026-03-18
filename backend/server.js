@@ -8,7 +8,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const { attachWebSocketServer } = require('./services/websocketServer');
-
+const { initializeNotificationSocket } = require('./services/notificationSocket');
 const server = express();
 
 // Set up Global Rate Limiting to prevent DDoS and Brute Force Attacks
@@ -55,6 +55,9 @@ server.get(
 
 const PORT = process.env.PORT || 8080;
 const httpServer = http.createServer(server);
+
+// Socket.IO notifications share the same port.
+initializeNotificationSocket(httpServer);
 
 // WebSocket server shares the same port (path: /ws)
 attachWebSocketServer(httpServer);

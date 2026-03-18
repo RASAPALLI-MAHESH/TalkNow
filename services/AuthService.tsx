@@ -189,6 +189,16 @@ export const logout = async (): Promise<void> => {
     }
 };
 
+export const followUser = async (targetUserId: string, userId?: string): Promise<AuthResponse> => {
+    const response = await client.post('/follow', { targetUserId, userId });
+    return response.data;
+};
+
+export const unfollowUser = async (targetUserId: string, userId?: string): Promise<AuthResponse> => {
+    const response = await client.post('/unfollow', { targetUserId, userId });
+    return response.data;
+};
+
 const AuthService = {
     login,
     signUp,
@@ -197,7 +207,9 @@ const AuthService = {
     getCurrentUser,
     logout,
     sendSignupOtp,
-    verifySignupOtp
+    verifySignupOtp,
+    followUser,
+    unfollowUser,
 };
 
 export default AuthService;

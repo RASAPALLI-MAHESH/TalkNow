@@ -7,12 +7,12 @@ const styles = StyleSheet.create({
     },
     container: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: '#ffffff',
     },
     header: {
         width: '100%',
         height: 56,
-        backgroundColor: '#e3cae9',
+        backgroundColor: '#a0a0a0',
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 12,

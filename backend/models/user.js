@@ -35,6 +35,20 @@ const userSchema = new mongoose.Schema(
             type: Date,
             default: null
         },
+
+        // Social graph (minimal v1): store relationships as user ids.
+        following: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User',
+            },
+        ],
+        followers: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User',
+            },
+        ],
     },
     { timestamps: true }
 );

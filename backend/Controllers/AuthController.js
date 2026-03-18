@@ -3,6 +3,7 @@ const OtpModel = require("../models/otp");
 const bcrypt = require('bcryptjs');
 const { signAuthToken } = require("../config/Jwthandling");
 const sendOtp = require("../services/otpService");
+const mongoose = require('mongoose');
 
 const generateToken = (userId) => {
     return signAuthToken({ id: userId }, { expiresIn: "30d" });
@@ -239,3 +240,58 @@ exports.userProfile = async (req, res) => {
          res.status(500).json({message: "Server error", error: err.message});
     }
 }
+
+exports.followUser = async (req, res) => {
+    try {
+        if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
+
+        const userId = String(req.user.id);
+        const targetUserId = String(req.body?.targetUserId ?? req.body?.userId ?? '').trim();
+
+        if (!targetUserId) {
+            return res.status(400).json({ message: 'targetUserId is required' });
+        }
+        if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+            return res.status(400).json({ message: 'Invalid targetUserId' });
+        }
+        if (userId === targetUserId) {
+            return res.status(400).json({ message: 'You cannot follow yourself' });
+        }
+
+        const target = await User.findById(targetUserId).select('_id');
+        if (!target) return res.status(404).json({ message: 'Target user not found' });
+
+        await User.findByIdAndUpdate(userId, { $addToSet: { following: targetUserId } }, { new: false });
+        await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: userId } }, { new: false });
+
+        return res.status(200).json({ message: 'Followed successfully' });
+    } catch (err) {
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
+
+exports.unfollowUser = async (req, res) => {
+    try {
+        if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
+
+        const userId = String(req.user.id);
+        const targetUserId = String(req.body?.targetUserId ?? req.body?.userId ?? '').trim();
+
+        if (!targetUserId) {
+            return res.status(400).json({ message: 'targetUserId is required' });
+        }
+        if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+            return res.status(400).json({ message: 'Invalid targetUserId' });
+        }
+        if (userId === targetUserId) {
+            return res.status(400).json({ message: 'You cannot unfollow yourself' });
+        }
+
+        await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } }, { new: false });
+        await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } }, { new: false });
+
+        return res.status(200).json({ message: 'Unfollowed successfully' });
+    } catch (err) {
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
