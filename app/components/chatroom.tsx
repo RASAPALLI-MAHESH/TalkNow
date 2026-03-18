@@ -67,11 +67,125 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
 
     return (
         <SafeAreaView style={styles.safe} edges={['top']}>
-            <KeyboardAvoidingView
-                style={styles.safe}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={0}
-            >
+            {Platform.OS === 'ios' ? (
+                <KeyboardAvoidingView
+                    style={styles.safe}
+                    behavior="padding"
+                    keyboardVerticalOffset={0}
+                >
+                    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+                        <View style={styles.container}>
+                            <View style={styles.header}>
+                                <Pressable
+                                    onPress={handleBack}
+                                    style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
+                                    android_ripple={undefined}
+                                    hitSlop={10}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Go back"
+                                >
+                                    <Ionicons name="arrow-back" size={22} color="#000" />
+                                </Pressable>
+
+                                <Pressable
+                                    onPress={() => {}}
+                                    style={({ pressed }) => [styles.avatarButton, pressed && styles.pressed]}
+                                    android_ripple={undefined}
+                                    hitSlop={10}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Open profile"
+                                >
+                                    {typeof user?.profilePicture === 'string' && user.profilePicture.trim() ? (
+                                        <Image
+                                            source={{ uri: user.profilePicture.trim() }}
+                                            style={styles.avatarImage}
+                                        />
+                                    ) : (
+                                        <View style={styles.avatarFallback}>
+                                            <Text style={styles.avatarFallbackText}>{initials}</Text>
+                                        </View>
+                                    )}
+                                </Pressable>
+
+                                <Pressable
+                                    onPress={() => {}}
+                                    style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
+                                    android_ripple={undefined}
+                                    hitSlop={10}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Open chat details"
+                                >
+                                    <Text style={styles.headerTitle} numberOfLines={1}>
+                                        {user?.username ?? 'Chat'}
+                                    </Text>
+                                </Pressable>
+
+                                <Pressable
+                                    onPress={() => {}}
+                                    style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
+                                    android_ripple={undefined}
+                                    hitSlop={10}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="More options"
+                                >
+                                    <Ionicons name="ellipsis-vertical" size={20} color="#000" />
+                                </Pressable>
+                            </View>
+
+                            <FlatList
+                                data={messages}
+                                keyExtractor={(item) => item.id}
+                                contentContainerStyle={styles.messagesContent}
+                                keyboardShouldPersistTaps="handled"
+                                keyboardDismissMode="on-drag"
+                                renderItem={({ item }) => (
+                                    <View
+                                        style={[
+                                            styles.bubble,
+                                            item.sender === 'me' ? styles.bubbleMe : styles.bubbleOther,
+                                        ]}
+                                    >
+                                        <Text style={styles.bubbleText}>{item.text}</Text>
+                                    </View>
+                                )}
+                            />
+
+                            <View style={[styles.composer, { paddingBottom: composerPaddingBottom }]}>
+                                <View style={styles.inputBar}>
+                                    <TextInput
+                                        placeholder="Type a message…"
+                                        style={styles.input}
+                                        value={draft}
+                                        onChangeText={setDraft}
+                                        multiline
+                                        placeholderTextColor="#6733d0"
+                                        returnKeyType="send"
+                                        textAlignVertical="center"
+                                        onSubmitEditing={() => {
+                                            if (Platform.OS === 'ios') return;
+                                            handleSend();
+                                        }}
+                                    />
+                                    <Pressable
+                                        onPress={handleSend}
+                                        disabled={!canSend}
+                                        style={({ pressed }) => [
+                                            styles.sendButton,
+                                            (!canSend || pressed) && styles.sendButtonPressed,
+                                        ]}
+                                        android_ripple={undefined}
+                                        hitSlop={10}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="Send message"
+                                    >
+                                        <Text style={styles.sendText}>Send</Text>
+                                    </Pressable>
+                                </View>
+                            </View>
+                        </View>
+                    </TouchableWithoutFeedback>
+                </KeyboardAvoidingView>
+            ) : (
                 <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
                     <View style={styles.container}>
                         <View style={styles.header}>
@@ -103,10 +217,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                                 accessibilityLabel="Open profile"
                             >
                                 {typeof user?.profilePicture === 'string' && user.profilePicture.trim() ? (
-                                    <Image
-                                        source={{ uri: user.profilePicture.trim() }}
-                                        style={styles.avatarImage}
-                                    />
+                                    <Image source={{ uri: user.profilePicture.trim() }} style={styles.avatarImage} />
                                 ) : (
                                     <View style={styles.avatarFallback}>
                                         <Text style={styles.avatarFallbackText}>{initials}</Text>
@@ -155,10 +266,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                             keyboardDismissMode="on-drag"
                             renderItem={({ item }) => (
                                 <View
-                                    style={[
-                                        styles.bubble,
-                                        item.sender === 'me' ? styles.bubbleMe : styles.bubbleOther,
-                                    ]}
+                                    style={[styles.bubble, item.sender === 'me' ? styles.bubbleMe : styles.bubbleOther]}
                                 >
                                     <Text style={styles.bubbleText}>{item.text}</Text>
                                 </View>
@@ -199,7 +307,7 @@ const Chatroom = ({ navigation }: { navigation: any }) => {
                         </View>
                     </View>
                 </TouchableWithoutFeedback>
-            </KeyboardAvoidingView>
+            )}
         </SafeAreaView>
     );
 };
