@@ -39,8 +39,30 @@ const getDefaultApiUrl = (): string => {
 
 const normalizeApiOrigin = (rawUrl: string) => {
     const trimmed = rawUrl.trim().replace(/\/$/, '');
-    const withoutAuth = trimmed.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
-    return withoutAuth.replace(/\/$/, '');
+    const withScheme = /^https?:\/\//i.test(trimmed)
+        ? trimmed
+        : (() => {
+            const looksLocal =
+                /^localhost\b/i.test(trimmed) ||
+                /^127\.0\.0\.1\b/.test(trimmed) ||
+                /^\d{1,3}(?:\.\d{1,3}){3}\b/.test(trimmed);
+            return `${looksLocal ? 'http' : 'https'}://${trimmed}`;
+        })();
+
+    const withoutAuth = withScheme.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
+    const base = withoutAuth.replace(/\/$/, '');
+
+    // If you're pointing at Render with an http URL, Socket.IO polling can fail
+    // due to redirects. Upgrade to https for non-local hosts with no explicit port.
+    if (
+        base.startsWith('http://') &&
+        !base.includes('localhost') &&
+        !base.includes('127.0.0.1') &&
+        !/:\d+$/.test(base)
+    ) {
+        return `https://${base.slice('http://'.length)}`;
+    }
+    return base;
 };
 
 const Notifications = ({ navigation }: { navigation: any }) => {
@@ -53,8 +75,11 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
     useEffect(() => {
         const socket = io(apiOrigin, {
-            // Render/proxies may require polling fallback; allow both.
-            transports: ['websocket', 'polling'],
+            // Render/proxies often fail websocket upgrades from mobile clients.
+            // Polling is the most reliable transport here.
+            transports: ['polling'],
+            upgrade: false,
+            path: '/socket.io',
             reconnection: true,
             timeout: 10000,
         });
@@ -67,10 +92,15 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         };
 //connect and reconnect events are emitted by the socket when a connection is established or re-established, respectively. We listen for these events to register the user with the server whenever a connection is made.
         socket.on('connect', register);
-        socket.on('reconnect', register);
+    // Note: 'connect' fires on initial connect and reconnects.
 
         socket.on('connect_error', (err: any) => {
-            console.log('notification socket connect_error:', err?.message ?? err);
+            console.log('notification socket connect_error:', {
+                apiOrigin,
+                message: err?.message ?? String(err),
+                description: err?.description,
+                type: err?.type,
+            });
         });
 // the notifiction socket receives new_notification events with the following payload:
         socket.on('new_notification', (notification: any) => {
@@ -88,7 +118,6 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
         return () => {
             socket.off('connect', register);
-            socket.off('reconnect', register);
             socket.off('connect_error');
             socket.off('new_notification');
             socket.disconnect();
@@ -124,10 +153,16 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                     renderItem={({ item }) => (
                         <FollowRequestNotification username={item.username} message={item.message} />
                     )}
+                    style={styles.list}
+                    contentContainerStyle={[
+                        styles.listContent,
+                        items.length === 0 && styles.listContentEmpty,
+                    ]}
                     ListEmptyComponent={
-                        <Text style={styles.bodyText}>
-                            No notifications yet.
-                        </Text>
+                        <View style={styles.emptyWrap}>
+                            <Text style={styles.emptyTitle}>No notifications yet</Text>
+                            <Text style={styles.emptySubtitle}>Follow requests will show up here.</Text>
+                        </View>
                     }
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator={false}
@@ -179,11 +214,35 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingTop: 8,
     },
-    bodyText: {
-        fontSize: 14,
-        color: '#666',
+
+    list: {
+        flex: 1,
+        width: '100%',
+    },
+    listContent: {
+        paddingTop: 8,
+        paddingBottom: 14,
+    },
+    listContentEmpty: {
+        flexGrow: 1,
+        justifyContent: 'center',
+    },
+
+    emptyWrap: {
         paddingHorizontal: 16,
-        paddingTop: 16,
+        alignItems: 'center',
+    },
+    emptyTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#111',
+        marginBottom: 6,
+        textAlign: 'center',
+    },
+    emptySubtitle: {
+        fontSize: 13,
+        color: '#666',
+        textAlign: 'center',
     },
 
 })

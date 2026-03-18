@@ -5,8 +5,9 @@ import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
     Animated,
     FlatList,
     Platform,
@@ -33,8 +34,27 @@ const formatChatTime = (raw?: string) => {
 
 type GlobalUserSearchResult = {
     id?: string;
-    _id?: string;
+    _id?: unknown;
     username?: string;
+};
+
+const MONGO_OBJECT_ID_RE = /^[a-f\d]{24}$/i;
+
+const extractMongoObjectId = (raw: unknown): string => {
+    if (typeof raw === 'string') return raw.trim();
+    if (raw && typeof raw === 'object') {
+        const anyRaw = raw as any;
+        if (typeof anyRaw.$oid === 'string') return anyRaw.$oid.trim();
+        if (typeof anyRaw._id === 'string') return anyRaw._id.trim();
+        if (typeof anyRaw.id === 'string') return anyRaw.id.trim();
+    }
+    return '';
+};
+
+const pickValidUserId = (userLike: any): string => {
+    const candidate = userLike?.id ?? userLike?._id ?? userLike?.userId;
+    const id = extractMongoObjectId(candidate);
+    return MONGO_OBJECT_ID_RE.test(id) ? id : '';
 };
 
 const inferDevServerBaseUrl = (): string | null => {
@@ -70,6 +90,7 @@ type ChatRowAction = {
     onPress: () => void;
     disabled?: boolean;
     variant?: 'primary' | 'ghost';
+    loading?: boolean;
 };
 
 const ChatRow = ({
@@ -227,6 +248,7 @@ const GlobalChatRow = ({
     action: ChatRowAction;
 }) => {
     const variant = action.variant ?? 'ghost';
+    const spinnerColor = variant === 'primary' ? '#fff' : '#6733d0';
     return (
         <View style={styles.row}>
             <View style={styles.avatar}>
@@ -252,15 +274,20 @@ const GlobalChatRow = ({
                 accessibilityLabel={action.label}
                 hitSlop={10}
             >
-                <Text
-                    style={[
-                        styles.followButtonText,
-                        variant === 'primary' ? styles.followButtonTextPrimary : styles.followButtonTextGhost,
-                        action.disabled && styles.followButtonTextDisabled,
-                    ]}
-                >
-                    {action.label}
-                </Text>
+                {action.loading ? (
+                    <ActivityIndicator size="small" color={spinnerColor} />
+                ) : (
+                    <Text
+                        style={[
+                            styles.followButtonText,
+                            variant === 'primary' ? styles.followButtonTextPrimary : styles.followButtonTextGhost,
+                            action.disabled && styles.followButtonTextDisabled,
+                        ]}
+                        numberOfLines={1}
+                    >
+                        {action.label}
+                    </Text>
+                )}
             </Pressable>
         </View>
     );
@@ -320,7 +347,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         return () => loop.stop();
     }, [globalSearching, spinAnim]);
 
-    const runGlobalSearch = async (raw: string) => {
+    const runGlobalSearch = useCallback(async (raw: string) => {
         const q = raw.trim();
         if (!q) {
             setShowingGlobal(false);
@@ -378,9 +405,8 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     ? data.users
                     : [];
             const sanitized = users.map((u) => ({
-                id: u.id,
-                _id: u._id,
-                username: u.username,
+                id: pickValidUserId(u),
+                username: typeof u?.username === 'string' ? u.username.trim() : String(u?.username ?? '').trim(),
             }));
             setGlobalResults(sanitized);
         } catch (err: any) {
@@ -389,7 +415,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         } finally {
             setGlobalSearching(false);
         }
-    };
+    }, [apiOrigin]);
 
     useEffect(() => {
         if (searchMode !== 'global') return;
@@ -402,7 +428,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         return () => {
             if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         };
-    }, [query, searchMode]);
+    }, [query, runGlobalSearch, searchMode]);
 
     const filteredChats: ChatListItem[] = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -415,7 +441,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
     const globalAsChatRows: GlobalChatListItem[] = useMemo(() => {
         return globalResults.map((u, index) => {
-            const id = String(u.id ?? u._id ?? index);
+            const id = typeof u.id === 'string' ? u.id.trim() : '';
             const username = String(u.username ?? '').trim();
             return {
                 id,
@@ -443,9 +469,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
         try {
             if (nextFollowing) {
-                await followUser(targetUserId, currentUserId);
+                await followUser(targetUserId);
+
             } else {
-                await unfollowUser(targetUserId, currentUserId);
+                await unfollowUser(targetUserId);
             }
         } catch (err) {
             setFollowingById((prev) => ({ ...prev, [targetUserId]: !nextFollowing }));
@@ -496,12 +523,13 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         const following = targetUserId ? isFollowing(targetUserId) : false;
 
         const action: ChatRowAction = {
-            label: pending ? '...' : following ? 'Following' : 'Follow',
+            label: following ? 'Following' : 'Follow',
             onPress: () => {
                 void toggleFollow(targetUserId);
             },
             disabled: pending || !targetUserId || !currentUserId || targetUserId === currentUserId,
             variant: following ? 'ghost' : 'primary',
+            loading: false,
         };
 
         return <GlobalChatRow item={item} action={action} />;
@@ -681,7 +709,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                             <Ionicons name="close" size={18} color="#6733d0" />
                         </Pressable>
                     ) : null}
-{/* global search logic */}
+{/* Global search logic */}
                     <Pressable
                         onPress={() => {
                             if (searchMode === 'global') {
@@ -716,10 +744,21 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     </Pressable>
                 </Animated.View>
             </View>
+
+            {showingGlobal && globalError ? (
+                <View style={[styles.globalErrorWrap, { paddingHorizontal: horizontalSafePad }]}>
+                    <View style={styles.globalErrorInner}>
+                        <Text style={styles.globalErrorText} numberOfLines={2}>
+                            {globalError}
+                        </Text>
+                    </View>
+                </View>
+            ) : null}
+
             {showingGlobal ? (
                 <FlatList
                     data={globalAsChatRows}
-                    keyExtractor={(item, index) => String(item.id ?? index)}
+                    keyExtractor={(item, index) => (item.id ? String(item.id) : `missing-id-${index}`)}
                     renderItem={renderGlobalItem}
                     extraData={{ followingById, followPendingById, currentUserId }}
                     style={styles.list}
@@ -874,6 +913,21 @@ const styles = StyleSheet.create({
         borderRadius: 18,
         overflow: 'hidden',
     },
+    globalErrorWrap: {
+        width: '100%',
+        alignItems: 'center',
+        paddingTop: 6,
+        paddingBottom: 4,
+    },
+    globalErrorInner: {
+        width: '100%',
+        maxWidth: 420,
+    },
+    globalErrorText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#b00020',
+    },
     list: {
         flex: 1,
         width: '100%',
@@ -915,8 +969,9 @@ const styles = StyleSheet.create({
         minWidth: 0,
     },
     followButton: {
-        paddingHorizontal: 12,
-        height: 30,
+        minWidth: 104,
+        paddingHorizontal: 14,
+        height: 32,
         borderRadius: 16,
         borderWidth: 1,
         alignItems: 'center',
@@ -944,6 +999,8 @@ const styles = StyleSheet.create({
     followButtonText: {
         fontSize: 12,
         fontWeight: '800',
+        textAlign: 'center',
+        includeFontPadding: false,
     },
     followButtonTextPrimary: {
         color: '#fff',

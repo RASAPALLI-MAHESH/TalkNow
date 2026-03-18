@@ -6,7 +6,7 @@ const sendOtp = require("../services/otpService");
 const mongoose = require('mongoose');
 
 const generateToken = (userId) => {
-    return signAuthToken({ id: userId }, { expiresIn: "30d" });
+    return signAuthToken({ id: String(userId) }, { expiresIn: "30d" });
 };
 
 const OTP_TTL_MS = 10 * 60 * 1000;

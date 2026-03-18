@@ -90,8 +90,32 @@ const client = axios.create({
     timeout: 10000,
 });
 
+const withHttpScheme = (raw: string) => {
+    const trimmed = raw.trim().replace(/\/$/, '');
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+    const looksLocal =
+        /^localhost\b/i.test(trimmed) ||
+        /^127\.0\.0\.1\b/.test(trimmed) ||
+        /^\d{1,3}(?:\.\d{1,3}){3}\b/.test(trimmed);
+    return `${looksLocal ? 'http' : 'https'}://${trimmed}`;
+};
+
+const upgradeHttpToHttpsForRemote = (url: string) => {
+    if (
+        url.startsWith('http://') &&
+        !url.includes('localhost') &&
+        !url.includes('127.0.0.1') &&
+        !/:\d+$/.test(url)
+    ) {
+        return `https://${url.slice('http://'.length)}`;
+    }
+    return url;
+};
+
 const normalizeAuthBaseUrl = (rawUrl: string) => {
-    const trimmed = rawUrl.replace(/\/$/, '');
+    const base = upgradeHttpToHttpsForRemote(withHttpScheme(rawUrl));
+    const trimmed = base.replace(/\/$/, '');
     if (trimmed.endsWith('/api/auth')) return trimmed;
     if (trimmed.endsWith('/api')) return `${trimmed}/auth`;
     return `${trimmed}/api/auth`;
@@ -189,13 +213,13 @@ export const logout = async (): Promise<void> => {
     }
 };
 
-export const followUser = async (targetUserId: string, userId?: string): Promise<AuthResponse> => {
-    const response = await client.post('/follow', { targetUserId, userId });
+export const followUser = async (targetUserId: string): Promise<AuthResponse> => {
+    const response = await client.post('/follow', { targetUserId });
     return response.data;
 };
 
-export const unfollowUser = async (targetUserId: string, userId?: string): Promise<AuthResponse> => {
-    const response = await client.post('/unfollow', { targetUserId, userId });
+export const unfollowUser = async (targetUserId: string): Promise<AuthResponse> => {
+    const response = await client.post('/unfollow', { targetUserId });
     return response.data;
 };
 

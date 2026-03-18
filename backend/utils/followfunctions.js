@@ -13,7 +13,43 @@ const getTargetUserIdFromBody = (body) => {
 const getActorUserId = (req) => {
     // Prefer JWT identity.
     const fromToken = req?.user?.id;
-    if (fromToken) return String(fromToken);
+    if (fromToken) {
+        if (typeof fromToken === 'string') return fromToken.trim();
+
+        // Handle cases where token payload might contain an ObjectId-like object.
+        if (fromToken && typeof fromToken === 'object') {
+            const anyId = fromToken;
+
+            if (typeof anyId.$oid === 'string') return anyId.$oid.trim();
+            if (typeof anyId._id === 'string') return anyId._id.trim();
+            if (typeof anyId.id === 'string') return anyId.id.trim();
+
+            // Common decoded ObjectId shapes:
+            // - { _bsontype: 'ObjectId', id: { type: 'Buffer', data: [...] } }
+            // - { id: { type: 'Buffer', data: [...] } }
+            // - { type: 'Buffer', data: [...] }
+            const bufferCandidate = anyId?.id ?? anyId;
+            const data = bufferCandidate?.data;
+            if (bufferCandidate && typeof bufferCandidate === 'object' && bufferCandidate.type === 'Buffer' && Array.isArray(data)) {
+                try {
+                    return Buffer.from(data).toString('hex');
+                } catch {
+                    // ignore
+                }
+            }
+
+            // If the id is a raw byte array.
+            if (Array.isArray(anyId?.id) && anyId.id.every((n) => Number.isInteger(n))) {
+                try {
+                    return Buffer.from(anyId.id).toString('hex');
+                } catch {
+                    // ignore
+                }
+            }
+        }
+
+        return String(fromToken).trim();
+    }
     // Fallback (not recommended) if you ever call without authMiddleware.
     const fromBody = req?.body?.userId;
     return fromBody ? String(fromBody).trim() : '';
@@ -21,6 +57,7 @@ const getActorUserId = (req) => {
 
 const validateIds = (actorUserId, targetUserId) => {
     if (!actorUserId) return { ok: false, status: 401, message: 'Unauthorized' };
+    if (!mongoose.Types.ObjectId.isValid(String(actorUserId))) return { ok: false, status: 401, message: 'Unauthorized' };
     if (!targetUserId) return { ok: false, status: 400, message: 'targetUserId is required' };
     if (!mongoose.Types.ObjectId.isValid(targetUserId)) return { ok: false, status: 400, message: 'Invalid targetUserId' };
     if (String(actorUserId) === String(targetUserId)) return { ok: false, status: 400, message: 'You cannot follow yourself' };
