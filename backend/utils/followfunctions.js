@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const User = require('../models/user');
-const { OnlineUsers, getIo, getUserRoom } = require('../services/notificationSocket');
+const { getIo, getUserRoom } = require('../services/notificationSocket');
 
 // These handlers are meant to be mounted from backend/routes/authRoutes.js
 // with authMiddleware so req.user.id is available.
@@ -78,9 +78,10 @@ const followUser = async (req, res) => {
         await User.findByIdAndUpdate(userId, { $addToSet: { following: targetUserId } });
         await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: userId } });
 
-        // Emit real-time notification if the user is online.
-        const online = OnlineUsers.get(String(targetUserId));
-        if (online && (online.size ? online.size > 0 : true)) {
+        // Emit real-time notification to the target user's room.
+        // Emitting to an empty room is a no-op, so we don't need an online check here.
+        const io = getIo();
+        if (io) {
             const actor = await User.findById(userId).select('_id username');
             const payload = {
                 id: `${Date.now()}-${String(userId)}`,
@@ -91,10 +92,13 @@ const followUser = async (req, res) => {
                 createdAt: new Date().toISOString(),
             };
 
-            const io = getIo();
-            if (io) {
-                io.to(getUserRoom(targetUserId)).emit('new_notification', payload);
-            }
+            const room = getUserRoom(targetUserId);
+            io.to(room).emit('new_notification', payload);
+            console.log('[notifications] emitted follow notification', {
+                toUserId: String(targetUserId),
+                room,
+                fromUserId: String(userId),
+            });
         }
 
         return res.status(200).json({ message: 'User followed successfully' });

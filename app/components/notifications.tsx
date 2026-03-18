@@ -78,6 +78,8 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const [items, setItems] = useState<NotificationItem[]>([]);
 
     useEffect(() => {
+        // Create socket once per apiOrigin. Do NOT depend on currentUserId here,
+        // otherwise effect re-runs will disconnect the socket immediately.
         const socket = io(apiOrigin, {
             // Render/proxies often fail websocket upgrades from mobile clients.
             // Polling is the most reliable transport here.
@@ -87,22 +89,8 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             reconnection: true,
             timeout: 20000,
         });
-        socketRef.current = socket;
 
-        const register = () => {
-            if (currentUserId) {
-                socket.timeout(5000).emit('register', currentUserId, (err: any, res: any) => {
-                    if (err) {
-                        console.log('notification socket register timeout/error:', { apiOrigin, err });
-                        return;
-                    }
-                    console.log('notification socket registered:', { apiOrigin, res });
-                });
-            }
-        };
-//connect and reconnect events are emitted by the socket when a connection is established or re-established, respectively. We listen for these events to register the user with the server whenever a connection is made.
-        socket.on('connect', register);
-    // Note: 'connect' fires on initial connect and reconnects.
+        socketRef.current = socket;
 
         socket.on('connect', () => {
             console.log('notification socket connected:', { apiOrigin, socketId: socket.id });
@@ -135,11 +123,36 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         });
 
         return () => {
-            socket.off('connect', register);
             socket.off('connect_error');
             socket.off('new_notification');
+            socket.off('connect');
+            socket.off('disconnect');
             socket.disconnect();
             socketRef.current = null;
+        };
+    }, [apiOrigin]);
+
+    useEffect(() => {
+        const socket = socketRef.current;
+        if (!socket) return;
+        if (!currentUserId) return;
+
+        const doRegister = () => {
+            socket.timeout(5000).emit('register', currentUserId, (err: any, res: any) => {
+                if (err) {
+                    console.log('notification socket register timeout/error:', { apiOrigin, err });
+                    return;
+                }
+                console.log('notification socket registered:', { apiOrigin, res });
+            });
+        };
+
+        // Register immediately if connected; otherwise on next connect.
+        if (socket.connected) doRegister();
+        socket.on('connect', doRegister);
+
+        return () => {
+            socket.off('connect', doRegister);
         };
     }, [apiOrigin, currentUserId]);
 
