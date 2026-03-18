@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const User = require('../models/user');
+const Notification = require('../models/notification');
 const { getIo, getUserRoom } = require('../services/notificationSocket');
 
 // These handlers are meant to be mounted from backend/routes/authRoutes.js
@@ -78,18 +79,25 @@ const followUser = async (req, res) => {
         await User.findByIdAndUpdate(userId, { $addToSet: { following: targetUserId } });
         await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: userId } });
 
-        // Emit real-time notification to the target user's room.
-        // Emitting to an empty room is a no-op, so we don't need an online check here.
+        // Persist + emit notification to the target user's room.
         const io = getIo();
         if (io) {
             const actor = await User.findById(userId).select('_id username');
+            const message = 'started following you';
+            const doc = await Notification.create({
+                toUserId: targetUserId,
+                fromUserId: userId,
+                type: 'follow',
+                message,
+            });
+
             const payload = {
-                id: `${Date.now()}-${String(userId)}`,
+                id: String(doc._id),
                 type: 'follow',
                 username: actor?.username ? String(actor.username) : 'User',
-                message: 'sent you a follow request',
+                message,
                 fromUserId: String(userId),
-                createdAt: new Date().toISOString(),
+                createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
             };
 
             const room = getUserRoom(targetUserId);
@@ -132,6 +140,36 @@ const unfollowUser = async (req, res) => {
 
         await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } });
         await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } });
+
+        // Persist + emit notification to the target user's room.
+        const io = getIo();
+        if (io) {
+            const actor = await User.findById(userId).select('_id username');
+            const message = 'stopped following you';
+            const doc = await Notification.create({
+                toUserId: targetUserId,
+                fromUserId: userId,
+                type: 'unfollow',
+                message,
+            });
+
+            const payload = {
+                id: String(doc._id),
+                type: 'unfollow',
+                username: actor?.username ? String(actor.username) : 'User',
+                message,
+                fromUserId: String(userId),
+                createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
+            };
+
+            const room = getUserRoom(targetUserId);
+            io.to(room).emit('new_notification', payload);
+            console.log('[notifications] emitted unfollow notification', {
+                toUserId: String(targetUserId),
+                room,
+                fromUserId: String(userId),
+            });
+        }
 
         return res.status(200).json({ message: 'User unfollowed successfully' });
     } catch (err) {

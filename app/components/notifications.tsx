@@ -5,6 +5,7 @@ import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-nat
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import useAuth from '../../hooks/useAuth';
+import { getNotifications, type NotificationDto } from '../../services/AuthService';
 import FollowRequestNotification from './followrequestNotification';
 const HEADER_HEIGHT = 56;
 
@@ -15,6 +16,19 @@ type NotificationItem = {
     createdAt?: string;
     type?: string;
     fromUserId?: string;
+};
+
+const mergeByIdNewestFirst = (incoming: NotificationItem[], existing: NotificationItem[]) => {
+    const map = new Map<string, NotificationItem>();
+    for (const item of existing) map.set(item.id, item);
+    for (const item of incoming) map.set(item.id, item);
+    const merged = Array.from(map.values());
+    merged.sort((a, b) => {
+        const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+        const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+        return tb - ta;
+    });
+    return merged;
 };
 
 const inferDevServerBaseUrl = (): string | null => {
@@ -76,6 +90,36 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
     const socketRef = useRef<ReturnType<typeof io> | null>(null);
     const [items, setItems] = useState<NotificationItem[]>([]);
+
+    useEffect(() => {
+        let isActive = true;
+        const load = async () => {
+            if (!currentUserId) return;
+            try {
+                const res = await getNotifications();
+                const list = Array.isArray((res as any)?.notifications) ? ((res as any).notifications as NotificationDto[]) : [];
+                const normalized: NotificationItem[] = list.map((n) => ({
+                    id: String(n.id),
+                    username: String(n.username ?? 'User'),
+                    message: String(n.message ?? ''),
+                    createdAt: typeof n.createdAt === 'string' ? n.createdAt : undefined,
+                    type: typeof n.type === 'string' ? n.type : undefined,
+                    fromUserId: typeof n.fromUserId === 'string' ? n.fromUserId : undefined,
+                }));
+
+                if (!isActive) return;
+                setItems((prev) => mergeByIdNewestFirst(normalized, prev));
+            } catch (err: any) {
+                // Keep UI usable even if API is temporarily unreachable.
+                console.log('notification fetch error:', { apiOrigin, message: err?.message ?? String(err) });
+            }
+        };
+
+        load();
+        return () => {
+            isActive = false;
+        };
+    }, [apiOrigin, currentUserId]);
 
     useEffect(() => {
         // Create socket once per apiOrigin. Do NOT depend on currentUserId here,
@@ -140,13 +184,18 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         if (!currentUserId) return;
 
         const doRegister = () => {
-            socket.timeout(5000).emit('register', currentUserId, (err: any, res: any) => {
-                if (err) {
-                    console.log('notification socket register timeout/error:', { apiOrigin, err });
-                    return;
-                }
-                console.log('notification socket registered:', { apiOrigin, res });
-            });
+            if (!socket.connected) return;
+            try {
+                socket.timeout(5000).emit('register', currentUserId, (err: any, res: any) => {
+                    if (err) {
+                        console.log('notification socket register timeout/error:', { apiOrigin, err });
+                        return;
+                    }
+                    console.log('notification socket registered:', { apiOrigin, res });
+                });
+            } catch (err: any) {
+                console.log('notification socket register exception:', { apiOrigin, message: err?.message ?? String(err) });
+            }
         };
 
         // Register immediately if connected; otherwise on next connect.

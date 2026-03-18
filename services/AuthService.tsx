@@ -228,6 +228,20 @@ export const unfollowUser = async (targetUserId: string): Promise<AuthResponse> 
     return response.data;
 };
 
+export type NotificationDto = {
+    id: string;
+    username: string;
+    message: string;
+    createdAt?: string;
+    type?: string;
+    fromUserId?: string;
+};
+
+export const getNotifications = async (): Promise<{ notifications: NotificationDto[] }> => {
+    const response = await client.get('/notifications');
+    return response.data;
+};
+
 const AuthService = {
     login,
     signUp,
@@ -239,6 +253,7 @@ const AuthService = {
     verifySignupOtp,
     followUser,
     unfollowUser,
+    getNotifications,
 };
 
 export default AuthService;
