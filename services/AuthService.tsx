@@ -242,6 +242,16 @@ export const getNotifications = async (): Promise<{ notifications: NotificationD
     return response.data;
 };
 
+export const getUnreadNotificationCount = async (sinceIso: string): Promise<{ unread: number }> => {
+    const response = await client.get('/notifications/unread-count', { params: { since: sinceIso } });
+    return response.data;
+};
+
+export const deleteNotification = async (notificationId: string): Promise<{ ok: boolean }> => {
+    const response = await client.delete(`/notifications/${encodeURIComponent(notificationId)}`);
+    return response.data;
+};
+
 const AuthService = {
     login,
     signUp,
@@ -254,6 +264,8 @@ const AuthService = {
     followUser,
     unfollowUser,
     getNotifications,
+    getUnreadNotificationCount,
+    deleteNotification,
 };
 
 export default AuthService;

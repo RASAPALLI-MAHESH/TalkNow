@@ -4,6 +4,7 @@ const notificationSchema = new mongoose.Schema(
     {
         toUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
         fromUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        fromUsername: { type: String },
         type: { type: String, required: true },
         message: { type: String, required: true },
     },

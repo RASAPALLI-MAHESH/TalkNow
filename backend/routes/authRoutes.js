@@ -4,7 +4,7 @@ const authController = require("../Controllers/AuthController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { searchUsers } = require("../searchUsers");
 const { followUser, unfollowUser } = require("../utils/followfunctions");
-const { getNotifications } = require("../utils/notificationFunctions");
+const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
 
 // Signup Flow
 router.post("/send-signup-otp", authController.sendSignupOtp);
@@ -24,6 +24,8 @@ router.get("/profile", authMiddleware, authController.userProfile);
 router.post("/follow", authMiddleware, followUser);
 router.post("/unfollow", authMiddleware, unfollowUser);
 router.get("/notifications", authMiddleware, getNotifications);
+router.get("/notifications/unread-count", authMiddleware, getUnreadCount);
+router.delete("/notifications/:id", authMiddleware, deleteNotification);
 router.get("/search-users", async (req, res) => {
     try{
         const {query} = req.query;

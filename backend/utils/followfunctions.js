@@ -87,6 +87,7 @@ const followUser = async (req, res) => {
             const doc = await Notification.create({
                 toUserId: targetUserId,
                 fromUserId: userId,
+                fromUsername: actor?.username ? String(actor.username) : undefined,
                 type: 'follow',
                 message,
             });
@@ -149,6 +150,7 @@ const unfollowUser = async (req, res) => {
             const doc = await Notification.create({
                 toUserId: targetUserId,
                 fromUserId: userId,
+                fromUsername: actor?.username ? String(actor.username) : undefined,
                 type: 'unfollow',
                 message,
             });

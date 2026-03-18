@@ -1,13 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import useAuth from '../../hooks/useAuth';
-import { getNotifications, type NotificationDto } from '../../services/AuthService';
+import { deleteNotification, getNotifications, type NotificationDto } from '../../services/AuthService';
 import FollowRequestNotification from './followrequestNotification';
 const HEADER_HEIGHT = 56;
+
+const LAST_SEEN_KEY = 'notificationsLastSeenAt';
 
 type NotificationItem = {
     id: string;
@@ -90,12 +93,14 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
     const socketRef = useRef<ReturnType<typeof io> | null>(null);
     const [items, setItems] = useState<NotificationItem[]>([]);
+    const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         let isActive = true;
         const load = async () => {
             if (!currentUserId) return;
             try {
+                setLoading(true);
                 const res = await getNotifications();
                 const list = Array.isArray((res as any)?.notifications) ? ((res as any).notifications as NotificationDto[]) : [];
                 const normalized: NotificationItem[] = list.map((n) => ({
@@ -109,9 +114,14 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
                 if (!isActive) return;
                 setItems((prev) => mergeByIdNewestFirst(normalized, prev));
+
+                // Mark as seen after a successful fetch.
+                await SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
             } catch (err: any) {
                 // Keep UI usable even if API is temporarily unreachable.
                 console.log('notification fetch error:', { apiOrigin, message: err?.message ?? String(err) });
+            } finally {
+                if (isActive) setLoading(false);
             }
         };
 
@@ -166,6 +176,9 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             console.log('notification received:', { apiOrigin, normalized });
 
             setItems((prev) => [normalized, ...prev]);
+
+            // If you're already on this screen, treat it as seen.
+            void SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
         });
 
         return () => {
@@ -177,6 +190,24 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             socketRef.current = null;
         };
     }, [apiOrigin]);
+
+    const dismissNotification = async (id: string) => {
+        const trimmed = String(id || '').trim();
+        if (!trimmed) return;
+
+        let snapshot: NotificationItem[] | null = null;
+        setItems((prev) => {
+            snapshot = prev;
+            return prev.filter((n) => n.id !== trimmed);
+        });
+        try {
+            await deleteNotification(trimmed);
+        } catch (err: any) {
+            console.log('notification dismiss error:', { apiOrigin, message: err?.message ?? String(err) });
+            // Rollback so user doesn't lose it if delete failed.
+            if (snapshot) setItems(snapshot);
+        }
+    };
 
     useEffect(() => {
         const socket = socketRef.current;
@@ -233,7 +264,13 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                     data={items}
                     keyExtractor={(item) => item.id}
                     renderItem={({ item }) => (
-                        <FollowRequestNotification username={item.username} message={item.message} />
+                        <FollowRequestNotification
+                            username={item.username}
+                            message={item.message}
+                            onClose={() => {
+                                void dismissNotification(item.id);
+                            }}
+                        />
                     )}
                     style={styles.list}
                     contentContainerStyle={[
@@ -242,8 +279,17 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                     ]}
                     ListEmptyComponent={
                         <View style={styles.emptyWrap}>
-                            <Text style={styles.emptyTitle}>No notifications yet</Text>
-                            <Text style={styles.emptySubtitle}>Follow requests will show up here.</Text>
+                            {loading ? (
+                                <>
+                                    <ActivityIndicator size="small" color="#6733d0" />
+                                    <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading notifications…</Text>
+                                </>
+                            ) : (
+                                <>
+                                    <Text style={styles.emptyTitle}>No notifications yet</Text>
+                                    <Text style={styles.emptySubtitle}>Follow/unfollow activity will show up here.</Text>
+                                </>
+                            )}
                         </View>
                     }
                     keyboardShouldPersistTaps="handled"

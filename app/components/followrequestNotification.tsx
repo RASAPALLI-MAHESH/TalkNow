@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -5,23 +6,26 @@ type FollowRequestNotificationProps = {
     username: string;
     message: string;
     onPress?: () => void;
+    onClose?: () => void;
 };
 
 const FollowRequestNotification = ({
     username,
     message,
     onPress,
+    onClose,
 }: FollowRequestNotificationProps) => {
     const initial = String(username || '?').slice(0, 1).toUpperCase();
 
     return (
-        <Pressable
-            onPress={onPress}
-            disabled={!onPress}
-            style={({ pressed }) => [styles.row, pressed && onPress && styles.rowPressed]}
-            accessibilityRole={onPress ? 'button' : undefined}
-            accessibilityLabel={onPress ? `Notification from ${username}` : undefined}
-        >
+        <View style={styles.cardWrap}>
+            <Pressable
+                onPress={onPress}
+                disabled={!onPress}
+                style={({ pressed }) => [styles.card, pressed && onPress && styles.cardPressed]}
+                accessibilityRole={onPress ? 'button' : undefined}
+                accessibilityLabel={onPress ? `Notification from ${username}` : undefined}
+            >
             <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{initial}</Text>
             </View>
@@ -34,22 +38,46 @@ const FollowRequestNotification = ({
                     {message}
                 </Text>
             </View>
-        </Pressable>
+
+                <Pressable
+                    onPress={onClose}
+                    disabled={!onClose}
+                    hitSlop={10}
+                    style={({ pressed }) => [styles.closeButton, pressed && onClose && styles.closeButtonPressed]}
+                    accessibilityRole={onClose ? 'button' : undefined}
+                    accessibilityLabel={onClose ? 'Dismiss notification' : undefined}
+                >
+                    <Ionicons name="close" size={18} color="#6733d0" />
+                </Pressable>
+            </Pressable>
+        </View>
     );
 };
 
 const styles = StyleSheet.create({
-    row: {
+    cardWrap: {
+        width: '100%',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+    },
+    card: {
         width: '100%',
         flexDirection: 'row',
         alignItems: 'center',
         paddingVertical: 12,
         paddingHorizontal: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
+        borderRadius: 14,
         backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#eee',
+        // "Floating" feel
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOpacity: 0.08,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
     },
-    rowPressed: {
+    cardPressed: {
         backgroundColor: 'rgba(233,226,255,0.42)',
     },
     avatar: {
@@ -79,6 +107,19 @@ const styles = StyleSheet.create({
     message: {
         fontSize: 13,
         color: '#666',
+    },
+    closeButton: {
+        marginLeft: 10,
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(103,51,208,0.10)',
+        flexShrink: 0,
+    },
+    closeButtonPressed: {
+        opacity: 0.75,
     },
 });
 

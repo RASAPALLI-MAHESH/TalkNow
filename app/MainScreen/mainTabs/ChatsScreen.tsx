@@ -1,6 +1,6 @@
 import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
 import useAuth from '@/hooks/useAuth';
-import { followUser, getAuthErrorMessage, unfollowUser } from '@/services/AuthService';
+import { followUser, getAuthErrorMessage, getUnreadNotificationCount, unfollowUser } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -24,6 +24,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 const MODE_TOGGLE_WIDTH = 104;
 const MODE_TOGGLE_PADDING = 2;
 const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
+
+const NOTIFICATIONS_LAST_SEEN_KEY = 'notificationsLastSeenAt';
 
 const formatChatTime = (raw?: string) => {
     if (!raw) return '';
@@ -313,6 +315,8 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const [followingById, setFollowingById] = useState<Record<string, boolean>>({});
     const [followPendingById, setFollowPendingById] = useState<Record<string, boolean>>({});
 
+    const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+
     const searchInputRef = useRef<TextInput | null>(null);
     const focusAnim = useRef(new Animated.Value(0)).current;
     const modeAnim = useRef(new Animated.Value(0)).current; // 0 = local, 1 = global
@@ -320,6 +324,53 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
+
+    const checkUnreadNotifications = useCallback(async () => {
+        if (!currentUserId) {
+            setHasUnreadNotifications(false);
+            return;
+        }
+
+        try {
+            const since =
+                (await SecureStore.getItemAsync(NOTIFICATIONS_LAST_SEEN_KEY)) ?? new Date(0).toISOString();
+            const res = await getUnreadNotificationCount(since);
+            const unread = typeof (res as any)?.unread === 'number' ? (res as any).unread : 0;
+            setHasUnreadNotifications(unread > 0);
+        } catch {
+            // If endpoint fails, don't show a false dot.
+            setHasUnreadNotifications(false);
+        }
+    }, [currentUserId]);
+
+    useEffect(() => {
+        let interval: ReturnType<typeof setInterval> | null = null;
+
+        const start = () => {
+            void checkUnreadNotifications();
+            if (interval) clearInterval(interval);
+            interval = setInterval(() => {
+                void checkUnreadNotifications();
+            }, 20000);
+        };
+
+        const stop = () => {
+            if (interval) clearInterval(interval);
+            interval = null;
+        };
+
+        const unsubFocus = navigation?.addListener?.('focus', start);
+        const unsubBlur = navigation?.addListener?.('blur', stop);
+
+        // Initial run (Chats is usually the first screen).
+        start();
+
+        return () => {
+            stop();
+            if (typeof unsubFocus === 'function') unsubFocus();
+            if (typeof unsubBlur === 'function') unsubBlur();
+        };
+    }, [navigation, checkUnreadNotifications]);
 
     useEffect(() => {
         Animated.timing(modeAnim, {
@@ -543,13 +594,19 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                         styles.notification,
                         pressed && styles.notificationPressed,
                     ]}
-                    onPress={() => navigation.navigate('Notifications')}
+                    onPress={() => {
+                        setHasUnreadNotifications(false);
+                        navigation.navigate('Notifications');
+                    }}
                     hitSlop={10}
                     android_ripple={Platform.OS === 'android' ? { color: 'rgba(103,51,208,0.18)' } : undefined}
                     accessibilityRole="button"
                     accessibilityLabel="Notifications"
                 >
-                    <Ionicons name="notifications" size={22} color="#1a1073" />
+                    <View style={styles.notificationIconWrap}>
+                        <Ionicons name="notifications" size={22} color="#1a1073" />
+                        {hasUnreadNotifications && <View style={styles.notificationDot} />}
+                    </View>
                 </Pressable>
             </View>
 
@@ -1065,6 +1122,23 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     }
     ,
+    notificationIconWrap: {
+        width: 22,
+        height: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    notificationDot: {
+        position: 'absolute',
+        top: -1,
+        right: -1,
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#6733d0',
+        borderWidth: 1,
+        borderColor: '#fff',
+    },
     notificationPressed: {
         opacity: 0.75,
     }
