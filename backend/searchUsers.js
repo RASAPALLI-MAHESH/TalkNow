@@ -10,14 +10,12 @@ const searchUsers = async (query, { limit = 20 } = {}) => {
 
     const users = await User.find({ username: regex })
         .limit(Math.max(1, Math.min(50, Number(limit) || 20)))
-        .select('_id username email')
+        .select('_id username')
         .lean();
 
     return users.map((u) => ({
         id: String(u._id),
         username: u.username,
-        email: u.email,
     }));
 };
-
 module.exports = { searchUsers };

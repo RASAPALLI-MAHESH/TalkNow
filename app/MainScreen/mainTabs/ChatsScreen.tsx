@@ -1,4 +1,4 @@
-import ChatBar, { type ChatListItem } from '@/app/components/chatbar';
+import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -33,8 +33,6 @@ type GlobalUserSearchResult = {
     id?: string;
     _id?: string;
     username?: string;
-    name?: string;
-    email?: string;
 };
 
 const inferDevServerBaseUrl = (): string | null => {
@@ -46,6 +44,7 @@ const inferDevServerBaseUrl = (): string | null => {
 
     return `http://${host}:8080`;
 };
+
 
 const getDefaultApiUrl = (): string => {
     const envUrl = process.env.EXPO_PUBLIC_API_URL;
@@ -63,12 +62,11 @@ const normalizeApiOrigin = (rawUrl: string) => {
     const withoutAuth = trimmed.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
     return withoutAuth.replace(/\/$/, '');
 };
-
 const ChatRow = ({
     item,
     onPress,
 }: {
-    item: ChatListItem;
+    item: GlobalChatListItem;
     onPress: () => void;
 }) => {
     const [layout, setLayout] = useState({ width: 0, height: 0 });
@@ -84,8 +82,7 @@ const ChatRow = ({
 
     const onLayout = (e: LayoutChangeEvent) => {
         const { width, height } = e.nativeEvent.layout;
-        setLayout({ width, height });
-    };
+        setLayout({ width, height });    };
 
     const primeInk = (e: GestureResponderEvent) => {
         if (!layout.width) return;
@@ -204,9 +201,7 @@ const ChatRow = ({
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
                     <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.time} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
                 </View>
-                <Text style={styles.lastMessage} numberOfLines={1}>{item.lastMessage}</Text>
             </View>
         </Pressable>
     );
@@ -348,15 +343,14 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         });
     }, [query]);
 
-    const globalAsChatRows: ChatListItem[] = useMemo(() => {
+    const globalAsChatRows: GlobalChatListItem[] = useMemo(() => {
         return globalResults.map((u, index) => {
             const id = String(u.id ?? u._id ?? index);
-            const username = String(u.username ?? u.name ?? '').trim();
-            const email = typeof u.email === 'string' ? u.email.trim() : '';
+            const username = String(u.username ?? '').trim();
             return {
                 id,
-                name: username || email || 'User',
-                lastMessage: email || 'Tap to chat',
+                name: username || 'User',
+                lastMessage: '',
                 Date: '',
             };
         });
@@ -543,7 +537,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                             }
                         }}
                     />
-
+{/* searching query logic frontend */}
                     {query.trim().length > 0 ? (
                         <Pressable
                             onPress={() => {
@@ -563,7 +557,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                             <Ionicons name="close" size={18} color="#6733d0" />
                         </Pressable>
                     ) : null}
-
+{/* global search logic */}
                     <Pressable
                         onPress={() => {
                             if (searchMode === 'global') {
@@ -834,3 +828,4 @@ const styles = StyleSheet.create({
 
 
 export default ChatsScreen;
+

@@ -5,6 +5,9 @@ export type ChatListItem = {
   Date: string;
 };
 
+// Global search rows follow the same shape as normal chat rows.
+export type GlobalChatListItem = ChatListItem;
+
 // Simple in-memory chat list used by ChatsScreen.
 // (Replace with real backend data later.)
 const ChatBar: ChatListItem[] = [
