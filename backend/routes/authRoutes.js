@@ -3,7 +3,13 @@ const router = express.Router();
 const authController = require("../Controllers/AuthController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { searchUsers } = require("../searchUsers");
-const { followUser, unfollowUser } = require("../utils/followfunctions");
+const {
+    followUser,
+    unfollowUser,
+    acceptFollowRequest,
+    rejectFollowRequest,
+    getMutualConnections,
+} = require("../utils/followfunctions");
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
 
 // Signup Flow
@@ -23,10 +29,13 @@ router.get("/profile", authMiddleware, authController.userProfile);
 // follow  routes 
 router.post("/follow", authMiddleware, followUser);
 router.post("/unfollow", authMiddleware, unfollowUser);
+router.post("/follow/accept", authMiddleware, acceptFollowRequest);
+router.post("/follow/reject", authMiddleware, rejectFollowRequest);
+router.get("/connections/mutual", authMiddleware, getMutualConnections);
 router.get("/notifications", authMiddleware, getNotifications);
 router.get("/notifications/unread-count", authMiddleware, getUnreadCount);
 router.delete("/notifications/:id", authMiddleware, deleteNotification);
-router.get("/search-users", async (req, res) => {
+router.get("/search-users", authMiddleware, async (req, res) => {
     try{
         const {query} = req.query;
         if(!query || typeof query !== 'string' || !query.trim()){

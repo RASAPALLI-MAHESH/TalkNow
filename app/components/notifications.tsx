@@ -1,14 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import useAuth from '../../hooks/useAuth';
-import { deleteNotification, getNotifications, type NotificationDto } from '../../services/AuthService';
+import {
+    acceptFollowRequest as acceptFollowRequestApi,
+    deleteNotification,
+    getMutualConnections,
+    getNotifications,
+    rejectFollowRequest as rejectFollowRequestApi,
+    type MutualConnectionDto,
+    type NotificationDto,
+} from '../../services/AuthService';
+import FollowRequestComponent from './followRequestComponent';
 import FollowRequestNotification from './followrequestNotification';
 const HEADER_HEIGHT = 56;
+const TAB_TITLES = ['Notifications', 'Follow requests', 'All collections'] as const;
 
 const LAST_SEEN_KEY = 'notificationsLastSeenAt';
 
@@ -19,6 +29,12 @@ type NotificationItem = {
     createdAt?: string;
     type?: string;
     fromUserId?: string;
+};
+
+type MutualConnectionItem = {
+    id: string;
+    username: string;
+    message: string;
 };
 
 const mergeByIdNewestFirst = (incoming: NotificationItem[], existing: NotificationItem[]) => {
@@ -92,44 +108,70 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
     const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
     const socketRef = useRef<ReturnType<typeof io> | null>(null);
+    const pagerRef = useRef<ScrollView | null>(null);
     const [items, setItems] = useState<NotificationItem[]>([]);
     const [loading, setLoading] = useState(false);
+    const [activeTab, setActiveTab] = useState(0);
+    const [followActionPendingById, setFollowActionPendingById] = useState<Record<string, boolean>>({});
+    const [connections, setConnections] = useState<MutualConnectionItem[]>([]);
+    const [connectionsLoading, setConnectionsLoading] = useState(false);
+    const [collectionsQuery, setCollectionsQuery] = useState('');
+    const [refreshing, setRefreshing] = useState(false);
+    const { width } = useWindowDimensions();
+
+    const followRequestItems = useMemo(() => {
+        return items.filter((item) => {
+            const type = String(item.type || '').toLowerCase();
+            const message = String(item.message || '').toLowerCase();
+            return type === 'follow_request' || message.includes('follow request');
+        });
+    }, [items]);
+
+    const filteredConnections = useMemo(() => {
+        const q = collectionsQuery.trim().toLowerCase();
+        if (!q) return connections;
+        return connections.filter((item) => {
+            const username = String(item.username || '').toLowerCase();
+            const message = String(item.message || '').toLowerCase();
+            return username.includes(q) || message.includes(q);
+        });
+    }, [collectionsQuery, connections]);
+
+    const goToTab = (index: number) => {
+        setActiveTab(index);
+        pagerRef.current?.scrollTo({ x: width * index, y: 0, animated: true });
+    };
+
+    const loadNotifications = useCallback(async () => {
+        if (!currentUserId) return;
+        try {
+            setLoading(true);
+            const res = await getNotifications();
+            const list = Array.isArray((res as any)?.notifications) ? ((res as any).notifications as NotificationDto[]) : [];
+            const normalized: NotificationItem[] = list.map((n) => ({
+                id: String(n.id),
+                username: String(n.username ?? 'User'),
+                message: String(n.message ?? ''),
+                createdAt: typeof n.createdAt === 'string' ? n.createdAt : undefined,
+                type: typeof n.type === 'string' ? n.type : undefined,
+                fromUserId: typeof n.fromUserId === 'string' ? n.fromUserId : undefined,
+            }));
+
+            setItems((prev) => mergeByIdNewestFirst(normalized, prev));
+
+            // Mark as seen after a successful fetch.
+            await SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
+        } catch (err: any) {
+            // Keep UI usable even if API is temporarily unreachable.
+            console.log('notification fetch error:', { apiOrigin, message: err?.message ?? String(err) });
+        } finally {
+            setLoading(false);
+        }
+    }, [apiOrigin, currentUserId]);
 
     useEffect(() => {
-        let isActive = true;
-        const load = async () => {
-            if (!currentUserId) return;
-            try {
-                setLoading(true);
-                const res = await getNotifications();
-                const list = Array.isArray((res as any)?.notifications) ? ((res as any).notifications as NotificationDto[]) : [];
-                const normalized: NotificationItem[] = list.map((n) => ({
-                    id: String(n.id),
-                    username: String(n.username ?? 'User'),
-                    message: String(n.message ?? ''),
-                    createdAt: typeof n.createdAt === 'string' ? n.createdAt : undefined,
-                    type: typeof n.type === 'string' ? n.type : undefined,
-                    fromUserId: typeof n.fromUserId === 'string' ? n.fromUserId : undefined,
-                }));
-
-                if (!isActive) return;
-                setItems((prev) => mergeByIdNewestFirst(normalized, prev));
-
-                // Mark as seen after a successful fetch.
-                await SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
-            } catch (err: any) {
-                // Keep UI usable even if API is temporarily unreachable.
-                console.log('notification fetch error:', { apiOrigin, message: err?.message ?? String(err) });
-            } finally {
-                if (isActive) setLoading(false);
-            }
-        };
-
-        load();
-        return () => {
-            isActive = false;
-        };
-    }, [apiOrigin, currentUserId]);
+        void loadNotifications();
+    }, [loadNotifications]);
 
     useEffect(() => {
         // Create socket once per apiOrigin. Do NOT depend on currentUserId here,
@@ -209,6 +251,88 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         }
     };
 
+    const loadConnections = useCallback(async () => {
+        if (!currentUserId) return;
+        try {
+            setConnectionsLoading(true);
+            const res = await getMutualConnections();
+            const list = Array.isArray((res as any)?.connections)
+                ? ((res as any).connections as MutualConnectionDto[])
+                : [];
+
+            const normalized = list.map((item) => ({
+                id: String(item.id),
+                username: String(item.username ?? 'User'),
+                message: String(item.message ?? 'Connected'),
+            }));
+
+            setConnections(normalized);
+        } catch (err: any) {
+            console.log('connections fetch error:', { apiOrigin, message: err?.message ?? String(err) });
+        } finally {
+            setConnectionsLoading(false);
+        }
+    }, [apiOrigin, currentUserId]);
+
+    const handlePullToRefresh = useCallback(async () => {
+        if (refreshing) return;
+        setRefreshing(true);
+        try {
+            await Promise.all([loadNotifications(), loadConnections()]);
+        } finally {
+            setRefreshing(false);
+        }
+    }, [loadConnections, loadNotifications, refreshing]);
+
+    const handleAcceptFollowRequest = async (id: string) => {
+        const request = items.find((item) => item.id === id);
+        if (!request) return;
+        if (followActionPendingById[id]) return;
+
+        let snapshot: NotificationItem[] | null = null;
+        setFollowActionPendingById((prev) => ({ ...prev, [id]: true }));
+        setItems((prev) => {
+            snapshot = prev;
+            return prev.filter((item) => item.id !== id);
+        });
+
+        try {
+            await acceptFollowRequestApi(id, request.fromUserId);
+            await loadConnections();
+        } catch (err: any) {
+            console.log('follow request accept error:', { apiOrigin, message: err?.message ?? String(err) });
+            if (snapshot) setItems(snapshot);
+        } finally {
+            setFollowActionPendingById((prev) => ({ ...prev, [id]: false }));
+        }
+    };
+
+    const handleRejectFollowRequest = async (id: string) => {
+        const request = items.find((item) => item.id === id);
+        if (!request) return;
+        if (followActionPendingById[id]) return;
+
+        let snapshot: NotificationItem[] | null = null;
+        setFollowActionPendingById((prev) => ({ ...prev, [id]: true }));
+        setItems((prev) => {
+            snapshot = prev;
+            return prev.filter((item) => item.id !== id);
+        });
+
+        try {
+            await rejectFollowRequestApi(id, request.fromUserId);
+        } catch (err: any) {
+            console.log('follow request reject error:', { apiOrigin, message: err?.message ?? String(err) });
+            if (snapshot) setItems(snapshot);
+        } finally {
+            setFollowActionPendingById((prev) => ({ ...prev, [id]: false }));
+        }
+    };
+
+    useEffect(() => {
+        void loadConnections();
+    }, [loadConnections]);
+
     useEffect(() => {
         const socket = socketRef.current;
         if (!socket) return;
@@ -259,43 +383,208 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                 <View style={styles.headerRightSpacer} />
             </View>
 
-            <View style={styles.body}>
-                <FlatList
-                    data={items}
-                    keyExtractor={(item) => item.id}
-                    renderItem={({ item }) => (
-                        <FollowRequestNotification
-                            username={item.username}
-                            message={item.message}
-                            onClose={() => {
-                                void dismissNotification(item.id);
-                            }}
-                        />
-                    )}
-                    style={styles.list}
-                    contentContainerStyle={[
-                        styles.listContent,
-                        items.length === 0 && styles.listContentEmpty,
-                    ]}
-                    ListEmptyComponent={
-                        <View style={styles.emptyWrap}>
-                            {loading ? (
-                                <>
-                                    <ActivityIndicator size="small" color="#6733d0" />
-                                    <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading notifications…</Text>
-                                </>
-                            ) : (
-                                <>
-                                    <Text style={styles.emptyTitle}>No notifications yet</Text>
-                                    <Text style={styles.emptySubtitle}>Follow/unfollow activity will show up here.</Text>
-                                </>
-                            )}
-                        </View>
-                    }
-                    keyboardShouldPersistTaps="handled"
-                    showsVerticalScrollIndicator={false}
-                />
+            <View style={styles.tabsRow}>
+                {TAB_TITLES.map((title, index) => {
+                    const selected = activeTab === index;
+                    return (
+                        <Pressable
+                            key={title}
+                            style={({ pressed }) => [
+                                styles.tabButton,
+                                selected && styles.tabButtonActive,
+                                pressed && styles.tabButtonPressed,
+                            ]}
+                            onPress={() => goToTab(index)}
+                            accessibilityRole="button"
+                            accessibilityLabel={title}
+                        >
+                            <Text style={[styles.tabText, selected && styles.tabTextActive]} numberOfLines={1}>
+                                {title}
+                            </Text>
+                        </Pressable>
+                    );
+                })}
             </View>
+
+            <ScrollView
+                ref={pagerRef}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(event) => {
+                    const nextTab = Math.round(event.nativeEvent.contentOffset.x / Math.max(width, 1));
+                    setActiveTab(nextTab);
+                }}
+            >
+                <View style={[styles.page, { width }]}>
+                    <View style={styles.body}>
+                        <FlatList
+                            data={items}
+                            keyExtractor={(item) => item.id}
+                            refreshing={refreshing}
+                            onRefresh={() => {
+                                void handlePullToRefresh();
+                            }}
+                            initialNumToRender={8}
+                            maxToRenderPerBatch={8}
+                            windowSize={7}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                            renderItem={({ item }) => (
+                                <FollowRequestNotification
+                                    username={item.username}
+                                    message={item.message}
+                                    onClose={() => {
+                                        void dismissNotification(item.id);
+                                    }}
+                                />
+                            )}
+                            style={styles.list}
+                            contentContainerStyle={[
+                                styles.listContent,
+                                items.length === 0 && styles.listContentEmpty,
+                            ]}
+                            ListEmptyComponent={
+                                <View style={styles.emptyWrap}>
+                                    {loading ? (
+                                        <>
+                                            <ActivityIndicator size="small" color="#6733d0" />
+                                            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading notifications…</Text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Text style={styles.emptyTitle}>No notifications yet</Text>
+                                            <Text style={styles.emptySubtitle}>Follow/unfollow activity will show up here.</Text>
+                                        </>
+                                    )}
+                                </View>
+                            }
+                            keyboardShouldPersistTaps="handled"
+                            showsVerticalScrollIndicator={false}
+                        />
+                    </View>
+                </View>
+
+                <View style={[styles.page, { width }]}>
+                    <View style={styles.body}>
+                        <FlatList
+                            data={followRequestItems}
+                            keyExtractor={(item) => item.id}
+                            refreshing={refreshing}
+                            onRefresh={() => {
+                                void handlePullToRefresh();
+                            }}
+                            initialNumToRender={8}
+                            maxToRenderPerBatch={8}
+                            windowSize={7}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                            renderItem={({ item }) => (
+                                <FollowRequestComponent
+                                    username={item.username}
+                                    message={item.message}
+                                    onAccept={() => {
+                                        if (!followActionPendingById[item.id]) {
+                                            void handleAcceptFollowRequest(item.id);
+                                        }
+                                    }}
+                                    onReject={() => {
+                                        if (!followActionPendingById[item.id]) {
+                                            void handleRejectFollowRequest(item.id);
+                                        }
+                                    }}
+                                />
+                            )}
+                            style={styles.list}
+                            contentContainerStyle={[
+                                styles.listContent,
+                                followRequestItems.length === 0 && styles.listContentEmpty,
+                            ]}
+                            ListEmptyComponent={
+                                <View style={styles.emptyWrap}>
+                                    <Text style={styles.emptyTitle}>No follow requests yet</Text>
+                                    <Text style={styles.emptySubtitle}>When someone sends a follow request, it will appear here instantly.</Text>
+                                </View>
+                            }
+                            keyboardShouldPersistTaps="handled"
+                            showsVerticalScrollIndicator={false}
+                        />
+                    </View>
+                </View>
+
+                <View style={[styles.page, { width }]}>
+                    <View style={styles.body}>
+                        <View style={styles.collectionsSearchWrap}>
+                            <View style={styles.collectionsSearchBar}>
+                                <Ionicons name="search" size={18} color="#6733d0" />
+                                <TextInput
+                                    value={collectionsQuery}
+                                    onChangeText={setCollectionsQuery}
+                                    placeholder="Search collections"
+                                    placeholderTextColor="#8b79b7"
+                                    style={styles.collectionsSearchInput}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                />
+                            </View>
+                        </View>
+
+                        <FlatList
+                            data={filteredConnections}
+                            keyExtractor={(item) => item.id}
+                            refreshing={refreshing}
+                            onRefresh={() => {
+                                void handlePullToRefresh();
+                            }}
+                            initialNumToRender={10}
+                            maxToRenderPerBatch={10}
+                            windowSize={7}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                            renderItem={({ item }) => (
+                                <View style={styles.collectionRowWrap}>
+                                    <Pressable style={({ pressed }) => [styles.collectionRow, pressed && styles.collectionRowPressed]}>
+                                        <View style={styles.collectionAvatar}>
+                                            <Text style={styles.collectionAvatarText}>
+                                                {String(item.username || '?').slice(0, 1).toUpperCase()}
+                                            </Text>
+                                        </View>
+
+                                        <View style={styles.collectionRowContent}>
+                                            <Text style={styles.collectionName} numberOfLines={1}>
+                                                {item.username}
+                                            </Text>
+                                        </View>
+
+                                        <Text style={styles.collectionMessage} numberOfLines={1}>
+                                            {item.message}
+                                        </Text>
+                                    </Pressable>
+                                </View>
+                            )}
+                            style={styles.list}
+                            contentContainerStyle={[
+                                styles.listContent,
+                                filteredConnections.length === 0 && styles.listContentEmpty,
+                            ]}
+                            ListEmptyComponent={
+                                <View style={styles.emptyWrap}>
+                                    {connectionsLoading ? (
+                                        <>
+                                            <ActivityIndicator size="small" color="#6733d0" />
+                                            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading collections...</Text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Text style={styles.emptyTitle}>No accepted connections yet</Text>
+                                            <Text style={styles.emptySubtitle}>When follow requests are accepted, people will appear here.</Text>
+                                        </>
+                                    )}
+                                </View>
+                            }
+                            keyboardShouldPersistTaps="handled"
+                            showsVerticalScrollIndicator={false}
+                        />
+                    </View>
+                </View>
+            </ScrollView>
         </SafeAreaView>
     );
 }
@@ -342,6 +631,45 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingTop: 8,
     },
+    tabsRow: {
+        flexDirection: 'row',
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingTop: 10,
+        paddingBottom: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#eee',
+        backgroundColor: '#fff',
+    },
+    tabButton: {
+        flex: 1,
+        minHeight: 36,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: '#ddd',
+        backgroundColor: '#fafafa',
+        paddingHorizontal: 8,
+    },
+    tabButtonActive: {
+        borderColor: '#6733d0',
+        backgroundColor: 'rgba(103,51,208,0.12)',
+    },
+    tabButtonPressed: {
+        opacity: 0.8,
+    },
+    tabText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#555',
+    },
+    tabTextActive: {
+        color: '#1a1073',
+    },
+    page: {
+        flex: 1,
+    },
 
     list: {
         flex: 1,
@@ -371,6 +699,98 @@ const styles = StyleSheet.create({
         fontSize: 13,
         color: '#666',
         textAlign: 'center',
+    },
+    placeholderWrap: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 18,
+    },
+    placeholderTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#111',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    placeholderSubtitle: {
+        fontSize: 13,
+        color: '#666',
+        textAlign: 'center',
+    },
+    collectionsSearchWrap: {
+        paddingHorizontal: 12,
+        paddingBottom: 6,
+    },
+    collectionsSearchBar: {
+        width: '100%',
+        minHeight: 42,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#ddd',
+        backgroundColor: '#fafafa',
+        paddingHorizontal: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    collectionsSearchInput: {
+        flex: 1,
+        fontSize: 14,
+        color: '#111',
+        paddingVertical: 0,
+    },
+    collectionRowWrap: {
+        width: '100%',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+    },
+    collectionRow: {
+        width: '100%',
+        minHeight: 64,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: '#eee',
+        backgroundColor: '#fff',
+        paddingHorizontal: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOpacity: 0.06,
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
+    },
+    collectionRowPressed: {
+        backgroundColor: 'rgba(233,226,255,0.40)',
+    },
+    collectionAvatar: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        backgroundColor: '#e9e2ff',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
+    },
+    collectionAvatarText: {
+        color: '#350d81',
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    collectionRowContent: {
+        flex: 1,
+        minWidth: 0,
+        marginRight: 8,
+    },
+    collectionName: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#111',
+    },
+    collectionMessage: {
+        fontSize: 12,
+        color: '#666',
     },
 
 })

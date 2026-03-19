@@ -7,9 +7,12 @@ const connectDB = async () => {
     // than creating and destroying a connection per request
     const mongoUri = process.env.MONGO_URI || "mongodb://localhost:27017/productiv";
     const connectOptions = {
-      maxPoolSize: 100,
+      maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE || 200),
+      minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE || 10),
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
+      retryWrites: true,
+      autoIndex: process.env.NODE_ENV !== 'production',
     };
 
     try {

@@ -228,6 +228,41 @@ export const unfollowUser = async (targetUserId: string): Promise<AuthResponse> 
     return response.data;
 };
 
+export const acceptFollowRequest = async (
+    notificationId?: string,
+    requesterUserId?: string
+): Promise<AuthResponse> => {
+    const response = await client.post('/follow/accept', {
+        notificationId,
+        requesterUserId,
+    });
+    return response.data;
+};
+
+export const rejectFollowRequest = async (
+    notificationId?: string,
+    requesterUserId?: string
+): Promise<AuthResponse> => {
+    const response = await client.post('/follow/reject', {
+        notificationId,
+        requesterUserId,
+    });
+    return response.data;
+};
+
+export type MutualConnectionDto = {
+    id: string;
+    username: string;
+    message?: string;
+};
+
+export const getMutualConnections = async (q?: string): Promise<{ connections: MutualConnectionDto[] }> => {
+    const response = await client.get('/connections/mutual', {
+        params: q && q.trim().length > 0 ? { q: q.trim() } : undefined,
+    });
+    return response.data;
+};
+
 export type NotificationDto = {
     id: string;
     username: string;
@@ -263,6 +298,9 @@ const AuthService = {
     verifySignupOtp,
     followUser,
     unfollowUser,
+    acceptFollowRequest,
+    rejectFollowRequest,
+    getMutualConnections,
     getNotifications,
     getUnreadNotificationCount,
     deleteNotification,

@@ -65,6 +65,29 @@ const validateIds = (actorUserId, targetUserId) => {
     return { ok: true };
 };
 
+const emitNotification = async (toUserId, payload) => {
+    const io = getIo();
+    if (!io) return;
+
+    const room = getUserRoom(toUserId);
+    io.to(room).emit('new_notification', payload);
+};
+
+const toSafeUsername = (value) => {
+    const text = String(value ?? '').trim();
+    return text.length > 0 ? text : 'User';
+};
+
+const isDuplicateKeyError = (err) => Number(err?.code) === 11000;
+
+const escapeRegex = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const parsePositiveInt = (raw, fallback, min, max) => {
+    const n = Number.parseInt(String(raw ?? ''), 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(Math.max(n, min), max);
+};
+
 const followUser = async (req, res) => {
     try {
         const userId = getActorUserId(req);
@@ -76,51 +99,66 @@ const followUser = async (req, res) => {
         const target = await User.findById(targetUserId).select('_id');
         if (!target) return res.status(404).json({ message: 'Target user not found' });
 
-        await User.findByIdAndUpdate(userId, { $addToSet: { following: targetUserId } });
-        await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: userId } });
+        // Follow flow is request-based. Persist/emit only a follow_request notification.
+        const existingPending = await Notification.findOne({
+            toUserId: targetUserId,
+            fromUserId: userId,
+            type: 'follow_request',
+        })
+            .select('_id createdAt')
+            .lean();
 
-        // Persist + emit notification to the target user's room.
-        const io = getIo();
-        if (io) {
-            const actor = await User.findById(userId).select('_id username');
-            const message = 'started following you';
-            const doc = await Notification.create({
-                toUserId: targetUserId,
-                fromUserId: userId,
-                fromUsername: actor?.username ? String(actor.username) : undefined,
-                type: 'follow',
-                message,
-            });
-
-            const payload = {
-                id: String(doc._id),
-                type: 'follow',
-                username: actor?.username ? String(actor.username) : 'User',
-                message,
-                fromUserId: String(userId),
-                createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
-            };
-
-            const room = getUserRoom(targetUserId);
-            // Helpful diagnostics: see whether the receiver is actually connected/registered.
-            let roomSize = undefined;
-            try {
-                const sockets = await io.in(room).allSockets();
-                roomSize = sockets?.size;
-            } catch {
-                // ignore
-            }
-
-            io.to(room).emit('new_notification', payload);
-            console.log('[notifications] emitted follow notification', {
-                toUserId: String(targetUserId),
-                room,
-                roomSize,
-                fromUserId: String(userId),
+        if (existingPending?._id) {
+            return res.status(200).json({
+                message: 'Follow request already sent',
+                requestId: String(existingPending._id),
             });
         }
 
-        return res.status(200).json({ message: 'User followed successfully' });
+        const actor = await User.findById(userId).select('_id username').lean();
+        const message = 'sent you a follow request';
+
+        let doc;
+        try {
+            doc = await Notification.create({
+                toUserId: targetUserId,
+                fromUserId: userId,
+                fromUsername: actor?.username ? String(actor.username) : undefined,
+                type: 'follow_request',
+                message,
+            });
+        } catch (err) {
+            if (!isDuplicateKeyError(err)) throw err;
+
+            const existing = await Notification.findOne({
+                toUserId: targetUserId,
+                fromUserId: userId,
+                type: 'follow_request',
+            })
+                .select('_id')
+                .lean();
+
+            return res.status(200).json({
+                message: 'Follow request already sent',
+                requestId: existing?._id ? String(existing._id) : undefined,
+            });
+        }
+
+        const payload = {
+            id: String(doc._id),
+            type: 'follow_request',
+            username: toSafeUsername(actor?.username),
+            message,
+            fromUserId: String(userId),
+            createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
+        };
+
+        await emitNotification(targetUserId, payload);
+
+        return res.status(200).json({
+            message: 'Follow request sent',
+            requestId: String(doc._id),
+        });
     } catch (err) {
         console.error('Error following user:', err);
         return res.status(500).json({ message: 'Internal server error' });
@@ -139,45 +177,318 @@ const unfollowUser = async (req, res) => {
             return res.status(v.status).json({ message: msg });
         }
 
-        await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } });
-        await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } });
+        const session = await mongoose.startSession();
+        let actor;
+        let doc;
+        try {
+            await session.withTransaction(async () => {
+                await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } }, { session });
+                await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } }, { session });
+                await User.findByIdAndUpdate(userId, { $pull: { followers: targetUserId } }, { session });
+                await User.findByIdAndUpdate(targetUserId, { $pull: { following: userId } }, { session });
 
-        // Persist + emit notification to the target user's room.
-        const io = getIo();
-        if (io) {
-            const actor = await User.findById(userId).select('_id username');
-            const message = 'stopped following you';
-            const doc = await Notification.create({
-                toUserId: targetUserId,
-                fromUserId: userId,
-                fromUsername: actor?.username ? String(actor.username) : undefined,
-                type: 'unfollow',
-                message,
+                await Notification.deleteMany(
+                    {
+                        $or: [
+                            { toUserId: targetUserId, fromUserId: userId, type: 'follow_request' },
+                            { toUserId: userId, fromUserId: targetUserId, type: 'follow_request' },
+                        ],
+                    },
+                    { session }
+                );
+
+                actor = await User.findById(userId).select('_id username').session(session).lean();
+                const message = 'removed connection';
+                const created = await Notification.create(
+                    [
+                        {
+                            toUserId: targetUserId,
+                            fromUserId: userId,
+                            fromUsername: actor?.username ? String(actor.username) : undefined,
+                            type: 'unfollow',
+                            message,
+                        },
+                    ],
+                    { session }
+                );
+                doc = created[0];
             });
-
-            const payload = {
-                id: String(doc._id),
-                type: 'unfollow',
-                username: actor?.username ? String(actor.username) : 'User',
-                message,
-                fromUserId: String(userId),
-                createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
-            };
-
-            const room = getUserRoom(targetUserId);
-            io.to(room).emit('new_notification', payload);
-            console.log('[notifications] emitted unfollow notification', {
-                toUserId: String(targetUserId),
-                room,
-                fromUserId: String(userId),
-            });
+        } finally {
+            await session.endSession();
         }
 
-        return res.status(200).json({ message: 'User unfollowed successfully' });
+        const payload = {
+            id: String(doc._id),
+            type: 'unfollow',
+            username: toSafeUsername(actor?.username),
+            message,
+            fromUserId: String(userId),
+            createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
+        };
+
+        await emitNotification(targetUserId, payload);
+
+        return res.status(200).json({ message: 'Connection removed' });
     } catch (err) {
         console.error('Error unfollowing user:', err);
         return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
-module.exports = { followUser, unfollowUser };
+const acceptFollowRequest = async (req, res) => {
+    try {
+        const userId = getActorUserId(req);
+        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const notificationId = String(req.body?.notificationId ?? '').trim();
+        const requesterUserIdFromBody = String(req.body?.requesterUserId ?? req.body?.fromUserId ?? '').trim();
+
+        let requesterUserId = requesterUserIdFromBody;
+        let requester = null;
+        let currentUser = null;
+        let doc;
+
+        const session = await mongoose.startSession();
+        try {
+            await session.withTransaction(async () => {
+                if (notificationId) {
+                    if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+                        throw Object.assign(new Error('Invalid notificationId'), { statusCode: 400 });
+                    }
+
+                    const requestDoc = await Notification.findOne({
+                        _id: notificationId,
+                        toUserId: userId,
+                        type: 'follow_request',
+                    })
+                        .select('_id fromUserId')
+                        .session(session)
+                        .lean();
+
+                    if (!requestDoc?._id) {
+                        throw Object.assign(new Error('Follow request not found'), { statusCode: 404 });
+                    }
+
+                    requesterUserId = String(requestDoc.fromUserId);
+                }
+
+                if (!requesterUserId || !mongoose.Types.ObjectId.isValid(requesterUserId)) {
+                    throw Object.assign(new Error('requesterUserId is required'), { statusCode: 400 });
+                }
+                if (String(requesterUserId) === String(userId)) {
+                    throw Object.assign(new Error('Invalid requesterUserId'), { statusCode: 400 });
+                }
+
+                requester = await User.findById(requesterUserId).select('_id username').session(session).lean();
+                if (!requester?._id) {
+                    throw Object.assign(new Error('Requester user not found'), { statusCode: 404 });
+                }
+
+                currentUser = await User.findById(userId).select('_id username').session(session).lean();
+                if (!currentUser?._id) {
+                    throw Object.assign(new Error('Current user not found'), { statusCode: 404 });
+                }
+
+                await User.findByIdAndUpdate(
+                    userId,
+                    {
+                        $addToSet: {
+                            following: requesterUserId,
+                            followers: requesterUserId,
+                        },
+                    },
+                    { session }
+                );
+
+                await User.findByIdAndUpdate(
+                    requesterUserId,
+                    {
+                        $addToSet: {
+                            following: userId,
+                            followers: userId,
+                        },
+                    },
+                    { session }
+                );
+
+                await Notification.deleteMany(
+                    {
+                        toUserId: userId,
+                        fromUserId: requesterUserId,
+                        type: 'follow_request',
+                    },
+                    { session }
+                );
+
+                const message = 'accepted your follow request';
+                const created = await Notification.create(
+                    [
+                        {
+                            toUserId: requesterUserId,
+                            fromUserId: userId,
+                            fromUsername: currentUser?.username ? String(currentUser.username) : undefined,
+                            type: 'follow_accept',
+                            message,
+                        },
+                    ],
+                    { session }
+                );
+                doc = created[0];
+            });
+        } catch (err) {
+            const statusCode = Number(err?.statusCode);
+            if (statusCode >= 400 && statusCode < 500) {
+                return res.status(statusCode).json({ message: err.message });
+            }
+            throw err;
+        } finally {
+            await session.endSession();
+        }
+
+        const payload = {
+            id: String(doc._id),
+            type: 'follow_accept',
+            username: toSafeUsername(currentUser?.username),
+            message,
+            fromUserId: String(userId),
+            createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
+        };
+
+        await emitNotification(requesterUserId, payload);
+
+        return res.status(200).json({
+            message: 'Follow request accepted',
+            connectedUser: {
+                id: String(requester._id),
+                username: toSafeUsername(requester.username),
+            },
+        });
+    } catch (err) {
+        console.error('Error accepting follow request:', err);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+const rejectFollowRequest = async (req, res) => {
+    try {
+        const userId = getActorUserId(req);
+        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const notificationId = String(req.body?.notificationId ?? '').trim();
+        const requesterUserIdFromBody = String(req.body?.requesterUserId ?? req.body?.fromUserId ?? '').trim();
+
+        const session = await mongoose.startSession();
+        try {
+            await session.withTransaction(async () => {
+                if (notificationId) {
+                    if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+                        throw Object.assign(new Error('Invalid notificationId'), { statusCode: 400 });
+                    }
+
+                    const result = await Notification.deleteOne(
+                        {
+                            _id: notificationId,
+                            toUserId: userId,
+                            type: 'follow_request',
+                        },
+                        { session }
+                    );
+
+                    if (!result?.deletedCount) {
+                        throw Object.assign(new Error('Follow request not found'), { statusCode: 404 });
+                    }
+                    return;
+                }
+
+                if (!requesterUserIdFromBody || !mongoose.Types.ObjectId.isValid(requesterUserIdFromBody)) {
+                    throw Object.assign(new Error('requesterUserId is required'), { statusCode: 400 });
+                }
+
+                await Notification.deleteMany(
+                    {
+                        toUserId: userId,
+                        fromUserId: requesterUserIdFromBody,
+                        type: 'follow_request',
+                    },
+                    { session }
+                );
+            });
+        } catch (err) {
+            const statusCode = Number(err?.statusCode);
+            if (statusCode >= 400 && statusCode < 500) {
+                return res.status(statusCode).json({ message: err.message });
+            }
+            throw err;
+        } finally {
+            await session.endSession();
+        }
+
+        return res.status(200).json({ message: 'Follow request rejected' });
+    } catch (err) {
+        console.error('Error rejecting follow request:', err);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+const getMutualConnections = async (req, res) => {
+    try {
+        const userId = getActorUserId(req);
+        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+
+        const q = String(req.query?.q ?? '').trim().toLowerCase();
+        const limit = parsePositiveInt(req.query?.limit, 50, 1, 100);
+        const offset = parsePositiveInt(req.query?.offset, 0, 0, 1000000);
+        const escapedQuery = q ? escapeRegex(q) : '';
+
+        const pipeline = [
+            { $match: { _id: new mongoose.Types.ObjectId(String(userId)) } },
+            { $project: { mutualIds: { $setIntersection: ['$following', '$followers'] } } },
+            {
+                $lookup: {
+                    from: 'users',
+                    let: { mutualIds: '$mutualIds' },
+                    pipeline: [
+                        { $match: { $expr: { $in: ['$_id', '$$mutualIds'] } } },
+                        { $project: { _id: 1, username: 1 } },
+                        ...(escapedQuery
+                            ? [{ $match: { username: { $regex: escapedQuery, $options: 'i' } } }]
+                            : []),
+                        { $sort: { username: 1 } },
+                        { $skip: offset },
+                        { $limit: limit },
+                    ],
+                    as: 'connections',
+                },
+            },
+            { $project: { _id: 0, connections: 1 } },
+        ];
+
+        const result = await User.aggregate(pipeline);
+        const rawConnections = Array.isArray(result?.[0]?.connections) ? result[0].connections : [];
+
+        const connections = rawConnections.map((u) => ({
+            id: String(u._id),
+            username: toSafeUsername(u.username),
+            message: 'Connected',
+        }));
+
+        return res.status(200).json({ connections });
+    } catch (err) {
+        console.error('Error fetching mutual connections:', err);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+module.exports = {
+    followUser,
+    unfollowUser,
+    acceptFollowRequest,
+    rejectFollowRequest,
+    getMutualConnections,
+};

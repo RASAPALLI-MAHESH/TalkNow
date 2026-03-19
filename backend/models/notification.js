@@ -13,5 +13,16 @@ const notificationSchema = new mongoose.Schema(
 
 // Prevent unbounded collection scans for the common query: "latest notifications for a user"
 notificationSchema.index({ toUserId: 1, createdAt: -1 });
+notificationSchema.index({ toUserId: 1, type: 1, createdAt: -1 });
+
+// Enforce one active pending follow request per user pair to avoid duplicate rows under concurrency.
+notificationSchema.index(
+    { toUserId: 1, fromUserId: 1, type: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { type: 'follow_request' },
+        name: 'uniq_pending_follow_request_per_pair',
+    }
+);
 
 module.exports = mongoose.model('Notification', notificationSchema);
