@@ -177,8 +177,29 @@ export const verifySignupOtp = async (email: string, otp: string): Promise<AuthR
     return response.data;
 };
 
-export const signUp = async (Firstname: string, email: string, username: string, password: string, otp: string): Promise<AuthResponse> => {
-    const response = await client.post('/signup', { Firstname, email, username, password, otp });
+export const checkUsernameAvailability = async (username: string): Promise<{ available: boolean; message?: string }> => {
+    const response = await client.get('/check-username', {
+        params: { username: username.trim() },
+    });
+    return response.data;
+};
+
+export const signUp = async (
+    Firstname: string,
+    email: string,
+    username: string,
+    password: string,
+    otp: string,
+    profilePicture?: string
+): Promise<AuthResponse> => {
+    const response = await client.post('/signup', {
+        Firstname,
+        email,
+        username,
+        password,
+        otp,
+        profilePicture,
+    });
     await setToken(response.data.token);
     return response.data;
 };
@@ -253,6 +274,7 @@ export const rejectFollowRequest = async (
 export type MutualConnectionDto = {
     id: string;
     username: string;
+    profilePicture?: string;
     message?: string;
 };
 
@@ -266,6 +288,7 @@ export const getMutualConnections = async (q?: string): Promise<{ connections: M
 export type NotificationDto = {
     id: string;
     username: string;
+    profilePicture?: string;
     message: string;
     createdAt?: string;
     type?: string;
@@ -296,6 +319,7 @@ const AuthService = {
     logout,
     sendSignupOtp,
     verifySignupOtp,
+    checkUsernameAvailability,
     followUser,
     unfollowUser,
     acceptFollowRequest,

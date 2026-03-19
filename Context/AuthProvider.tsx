@@ -48,8 +48,8 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
         await AuthService.verifySignupOtp(email, otp);
     };
 
-    const signUp = async (Firstname: string, email: string, username: string, password: string, otp: string) => {
-        const data = await AuthService.signUp(Firstname, email, username, password, otp);
+    const signUp = async (Firstname: string, email: string, username: string, password: string, otp: string, profilePicture?: string) => {
+        const data = await AuthService.signUp(Firstname, email, username, password, otp, profilePicture);
         setUser((data.user as AuthUser | undefined) ?? null);
     };
 

@@ -15,6 +15,7 @@ const { getNotifications, getUnreadCount, deleteNotification } = require("../uti
 // Signup Flow
 router.post("/send-signup-otp", authController.sendSignupOtp);
 router.post("/verify-signup-otp", authController.verifySignupOtp);
+router.get('/check-username', authController.checkUsernameAvailability);
 router.post("/signup", authController.signUp);
 
 // Login and Password Reset

@@ -22,6 +22,15 @@ const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase();
 const normalizeUsername = (value) => String(value ?? '').trim();
 const normalizeFirstname = (value) => String(value ?? '').trim();
 
+const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,24}$/;
+const PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).{6,72}$/;
+
+const isValidProfilePicture = (value) => {
+    if (!value) return true;
+    if (value.length > 2048) return false;
+    return /^https?:\/\//i.test(value) || /^file:\/\//i.test(value);
+};
+
 const asMongoDuplicateKeyMessage = (err) => {
     // Mongoose wraps MongoServerError; prefer consistent checks.
     const code = err?.code;
@@ -91,6 +100,26 @@ exports.verifySignupOtp = async (req, res) => {
     }
 }
 
+exports.checkUsernameAvailability = async (req, res) => {
+    try {
+        const username = normalizeUsername(req.query?.username);
+        if (!username) {
+            return res.status(400).json({ message: 'username is required' });
+        }
+        if (!USERNAME_REGEX.test(username)) {
+            return res.status(400).json({
+                message: 'Username must be 3-24 characters and use letters, numbers, or underscore only',
+                available: false,
+            });
+        }
+
+        const exists = await User.exists({ username });
+        return res.status(200).json({ available: !Boolean(exists) });
+    } catch (err) {
+        return res.status(500).json({ message: 'Server error', error: err.message });
+    }
+};
+
 exports.signUp = async (req, res) => {
     try {
         const Firstname = normalizeFirstname(req.body?.Firstname);
@@ -98,9 +127,19 @@ exports.signUp = async (req, res) => {
         const email = normalizeEmail(req.body?.email);
         const password = String(req.body?.password ?? '');
         const otp = String(req.body?.otp ?? '').trim();
+        const profilePicture = String(req.body?.profilePicture ?? '').trim();
 
         if (!Firstname || !username || !password || !email || !otp) {
             return res.status(400).json({ message: "Firstname, username, password, email and otp are required" });
+        }
+        if (!USERNAME_REGEX.test(username)) {
+            return res.status(400).json({ message: 'Username must be 3-24 characters and use letters, numbers, or underscore only' });
+        }
+        if (!PASSWORD_REGEX.test(password)) {
+            return res.status(400).json({ message: 'Password must be 6-72 chars and include at least 1 uppercase letter and 1 number' });
+        }
+        if (!isValidProfilePicture(profilePicture)) {
+            return res.status(400).json({ message: 'Invalid profile picture URL' });
         }
         
         // Final OTP check at creation
@@ -112,10 +151,15 @@ exports.signUp = async (req, res) => {
             return res.status(400).json({ message: "Email not verified or OTP expired" });
         }
         
-        // Check if username already taken
-        const usernameExists = await User.findOne({ username });
+        const [usernameExists, emailExists] = await Promise.all([
+            User.exists({ username }),
+            User.exists({ email }),
+        ]);
         if (usernameExists) {
             return res.status(400).json({ message: "Username already taken" });
+        }
+        if (emailExists) {
+            return res.status(400).json({ message: 'User already exists with this email' });
         }
 
         const hashedPassword = await bcrypt.hash(password , 10);
@@ -123,7 +167,8 @@ exports.signUp = async (req, res) => {
             Firstname,
             username,
             password: hashedPassword,
-            email
+            email,
+            profilePicture
         });
         await newUser.save();
         
@@ -134,7 +179,12 @@ exports.signUp = async (req, res) => {
         res.status(201).json({
             message: "User created successfully", 
             token, 
-            user: { id: newUser._id, username: newUser.username, email: newUser.email }
+            user: {
+                id: newUser._id,
+                username: newUser.username,
+                email: newUser.email,
+                profilePicture: newUser.profilePicture,
+            }
         });
     } catch(err) {
         const dup = asMongoDuplicateKeyMessage(err);

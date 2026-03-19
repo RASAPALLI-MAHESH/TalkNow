@@ -12,7 +12,7 @@ interface AuthContextType {
     loading: boolean;
     sendSignupOtp: (email: string) => Promise<void>;
     verifySignupOtp: (email: string, otp: string) => Promise<void>;
-    signUp: (Firstname: string, email: string, username: string, password: string, otp: string) => Promise<void>;
+    signUp: (Firstname: string, email: string, username: string, password: string, otp: string, profilePicture?: string) => Promise<void>;
     Login: (username: string, password: string) => Promise<void>;
     Logout: () => Promise<void>;
     forgotPassword: (email: string) => Promise<void>;

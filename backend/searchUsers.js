@@ -10,12 +10,13 @@ const searchUsers = async (query, { limit = 20 } = {}) => {
 
     const users = await User.find({ username: regex })
         .limit(Math.max(1, Math.min(50, Number(limit) || 20)))
-        .select('_id username')
+        .select('_id username profilePicture')
         .lean();
 
     return users.map((u) => ({
         id: String(u._id),
         username: u.username,
+        profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
     }));
 };
 module.exports = { searchUsers };

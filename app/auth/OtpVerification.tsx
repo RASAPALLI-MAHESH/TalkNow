@@ -31,8 +31,7 @@ const OtpVerification = ({ route, navigation } : { route: any, navigation : any 
         try {
             setLoading(true);
             await verifySignupOtp(email, normalizedOtp);
-            // Passed correctly: now navigate to user creation to setup username & password!
-            navigation.navigate("userCreation", { Firstname, email, otp: normalizedOtp });
+            navigation.navigate("AvatarandAge", { Firstname, email, otp: normalizedOtp });
         } catch (error: any) {
             Alert.alert("Error", getAuthErrorMessage(error, "Invalid OTP. Please try again."));
         } finally {

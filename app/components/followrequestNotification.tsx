@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 type FollowRequestNotificationProps = {
     username: string;
+    profilePicture?: string;
     message: string;
     onPress?: () => void;
     onClose?: () => void;
@@ -11,6 +12,7 @@ type FollowRequestNotificationProps = {
 
 const FollowRequestNotification = ({
     username,
+    profilePicture,
     message,
     onPress,
     onClose,
@@ -26,9 +28,13 @@ const FollowRequestNotification = ({
                 accessibilityRole={onPress ? 'button' : undefined}
                 accessibilityLabel={onPress ? `Notification from ${username}` : undefined}
             >
-            <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initial}</Text>
-            </View>
+            {typeof profilePicture === 'string' && profilePicture.trim().length > 0 ? (
+                <Image source={{ uri: profilePicture.trim() }} style={styles.avatarImage} />
+            ) : (
+                <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{initial}</Text>
+                </View>
+            )}
 
             <View style={styles.content}>
                 <Text style={styles.username} numberOfLines={1}>
@@ -88,6 +94,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
+    },
+    avatarImage: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        marginRight: 12,
+        backgroundColor: '#e9e2ff',
     },
     avatarText: {
         color: '#350d81',

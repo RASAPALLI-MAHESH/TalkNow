@@ -9,6 +9,7 @@ export type ChatListItem = {
 export type GlobalChatListItem = {
   id: string;
   name: string;
+  profilePicture?: string;
 };
 
 // Simple in-memory chat list used by ChatsScreen.

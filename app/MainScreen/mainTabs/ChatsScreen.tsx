@@ -10,6 +10,7 @@ import {
     ActivityIndicator,
     Animated,
     FlatList,
+    Image,
     Platform,
     Pressable,
     StyleSheet,
@@ -17,7 +18,7 @@ import {
     TextInput,
     View,
     type GestureResponderEvent,
-    type LayoutChangeEvent,
+    type LayoutChangeEvent
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -38,6 +39,7 @@ type GlobalUserSearchResult = {
     id?: string;
     _id?: unknown;
     username?: string;
+    profilePicture?: string;
 };
 
 const MONGO_OBJECT_ID_RE = /^[a-f\d]{24}$/i;
@@ -253,9 +255,13 @@ const GlobalChatRow = ({
     const spinnerColor = variant === 'primary' ? '#fff' : '#6733d0';
     return (
         <View style={styles.row}>
-            <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
-            </View>
+            {typeof item.profilePicture === 'string' && item.profilePicture.trim().length > 0 ? (
+                <Image source={{ uri: item.profilePicture.trim() }} style={styles.avatarImage} />
+            ) : (
+                <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
+                </View>
+            )}
 
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
@@ -458,6 +464,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             const sanitized = users.map((u) => ({
                 id: pickValidUserId(u),
                 username: typeof u?.username === 'string' ? u.username.trim() : String(u?.username ?? '').trim(),
+                profilePicture:
+                    typeof u?.profilePicture === 'string' && u.profilePicture.trim().length > 0
+                        ? u.profilePicture.trim()
+                        : '',
             }));
             setGlobalResults(sanitized);
         } catch (err: any) {
@@ -497,6 +507,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             return {
                 id,
                 name: username || 'User',
+                profilePicture:
+                    typeof u.profilePicture === 'string' && u.profilePicture.trim().length > 0
+                        ? u.profilePicture.trim()
+                        : '',
             };
         });
     }, [globalResults]);
@@ -1015,6 +1029,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
+    },
+    avatarImage: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        marginRight: 12,
+        backgroundColor: '#e9e2ff',
     },
     avatarText: {
         color: '#350d81',

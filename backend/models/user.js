@@ -53,4 +53,9 @@ const userSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
+// Explicit indexes for predictable performance at scale.
+userSchema.index({ email: 1 }, { unique: true, background: true });
+userSchema.index({ username: 1 }, { unique: true, background: true });
+userSchema.index({ createdAt: -1 }, { background: true });
+
 module.exports = mongoose.model("User", userSchema);

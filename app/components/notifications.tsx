@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import useAuth from '../../hooks/useAuth';
@@ -25,6 +25,7 @@ const LAST_SEEN_KEY = 'notificationsLastSeenAt';
 type NotificationItem = {
     id: string;
     username: string;
+    profilePicture?: string;
     message: string;
     createdAt?: string;
     type?: string;
@@ -34,6 +35,7 @@ type NotificationItem = {
 type MutualConnectionItem = {
     id: string;
     username: string;
+    profilePicture?: string;
     message: string;
 };
 
@@ -122,8 +124,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const followRequestItems = useMemo(() => {
         return items.filter((item) => {
             const type = String(item.type || '').toLowerCase();
-            const message = String(item.message || '').toLowerCase();
-            return type === 'follow_request' || message.includes('follow request');
+            return type === 'follow_request';
         });
     }, [items]);
 
@@ -151,6 +152,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             const normalized: NotificationItem[] = list.map((n) => ({
                 id: String(n.id),
                 username: String(n.username ?? 'User'),
+                profilePicture: typeof n.profilePicture === 'string' ? n.profilePicture : '',
                 message: String(n.message ?? ''),
                 createdAt: typeof n.createdAt === 'string' ? n.createdAt : undefined,
                 type: typeof n.type === 'string' ? n.type : undefined,
@@ -209,6 +211,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             const normalized: NotificationItem = {
                 id: String(notification?.id ?? `${Date.now()}`),
                 username: String(notification?.username ?? 'User'),
+                profilePicture: typeof notification?.profilePicture === 'string' ? notification.profilePicture : '',
                 message: String(notification?.message ?? ''),
                 createdAt: typeof notification?.createdAt === 'string' ? notification.createdAt : undefined,
                 type: typeof notification?.type === 'string' ? notification.type : undefined,
@@ -263,6 +266,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             const normalized = list.map((item) => ({
                 id: String(item.id),
                 username: String(item.username ?? 'User'),
+                profilePicture: typeof item.profilePicture === 'string' ? item.profilePicture : '',
                 message: String(item.message ?? 'Connected'),
             }));
 
@@ -300,8 +304,14 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             await acceptFollowRequestApi(id, request.fromUserId);
             await loadConnections();
         } catch (err: any) {
-            console.log('follow request accept error:', { apiOrigin, message: err?.message ?? String(err) });
-            if (snapshot) setItems(snapshot);
+            const status = Number(err?.response?.status);
+            if (status === 404) {
+                // Already handled on backend or stale client state; treat as processed.
+                await loadConnections();
+            } else {
+                console.log('follow request accept error:', { apiOrigin, message: err?.message ?? String(err), status });
+                if (snapshot) setItems(snapshot);
+            }
         } finally {
             setFollowActionPendingById((prev) => ({ ...prev, [id]: false }));
         }
@@ -322,8 +332,11 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         try {
             await rejectFollowRequestApi(id, request.fromUserId);
         } catch (err: any) {
-            console.log('follow request reject error:', { apiOrigin, message: err?.message ?? String(err) });
-            if (snapshot) setItems(snapshot);
+            const status = Number(err?.response?.status);
+            if (status !== 404) {
+                console.log('follow request reject error:', { apiOrigin, message: err?.message ?? String(err), status });
+                if (snapshot) setItems(snapshot);
+            }
         } finally {
             setFollowActionPendingById((prev) => ({ ...prev, [id]: false }));
         }
@@ -432,6 +445,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                             renderItem={({ item }) => (
                                 <FollowRequestNotification
                                     username={item.username}
+                                    profilePicture={item.profilePicture}
                                     message={item.message}
                                     onClose={() => {
                                         void dismissNotification(item.id);
@@ -480,6 +494,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                             renderItem={({ item }) => (
                                 <FollowRequestComponent
                                     username={item.username}
+                                    profilePicture={item.profilePicture}
                                     message={item.message}
                                     onAccept={() => {
                                         if (!followActionPendingById[item.id]) {
@@ -541,11 +556,15 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                             renderItem={({ item }) => (
                                 <View style={styles.collectionRowWrap}>
                                     <Pressable style={({ pressed }) => [styles.collectionRow, pressed && styles.collectionRowPressed]}>
-                                        <View style={styles.collectionAvatar}>
-                                            <Text style={styles.collectionAvatarText}>
-                                                {String(item.username || '?').slice(0, 1).toUpperCase()}
-                                            </Text>
-                                        </View>
+                                        {typeof item.profilePicture === 'string' && item.profilePicture.trim().length > 0 ? (
+                                            <Image source={{ uri: item.profilePicture.trim() }} style={styles.collectionAvatarImage} />
+                                        ) : (
+                                            <View style={styles.collectionAvatar}>
+                                                <Text style={styles.collectionAvatarText}>
+                                                    {String(item.username || '?').slice(0, 1).toUpperCase()}
+                                                </Text>
+                                            </View>
+                                        )}
 
                                         <View style={styles.collectionRowContent}>
                                             <Text style={styles.collectionName} numberOfLines={1}>
@@ -556,6 +575,17 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                                         <Text style={styles.collectionMessage} numberOfLines={1}>
                                             {item.message}
                                         </Text>
+
+                                        <Pressable
+                                            style={({ pressed }) => [styles.collectionActionButton, pressed && styles.collectionActionButtonPressed]}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={`Message ${item.username}`}
+                                            onPress={() => {
+                                                navigation.navigate('Chatroom');
+                                            }}
+                                        >
+                                            <Text style={styles.collectionActionButtonText}>Message</Text>
+                                        </Pressable>
                                     </Pressable>
                                 </View>
                             )}
@@ -773,6 +803,13 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         marginRight: 10,
     },
+    collectionAvatarImage: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        marginRight: 10,
+        backgroundColor: '#e9e2ff',
+    },
     collectionAvatarText: {
         color: '#350d81',
         fontSize: 15,
@@ -791,6 +828,25 @@ const styles = StyleSheet.create({
     collectionMessage: {
         fontSize: 12,
         color: '#666',
+        marginRight: 10,
+    },
+    collectionActionButton: {
+        minHeight: 32,
+        borderRadius: 9,
+        borderWidth: 1,
+        borderColor: '#6733d0',
+        backgroundColor: 'rgba(103,51,208,0.10)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 10,
+    },
+    collectionActionButtonPressed: {
+        opacity: 0.8,
+    },
+    collectionActionButtonText: {
+        fontSize: 12,
+        color: '#1a1073',
+        fontWeight: '700',
     },
 
 })

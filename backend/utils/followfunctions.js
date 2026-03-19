@@ -115,7 +115,7 @@ const followUser = async (req, res) => {
             });
         }
 
-        const actor = await User.findById(userId).select('_id username').lean();
+        const actor = await User.findById(userId).select('_id username profilePicture').lean();
         const message = 'sent you a follow request';
 
         let doc;
@@ -124,6 +124,7 @@ const followUser = async (req, res) => {
                 toUserId: targetUserId,
                 fromUserId: userId,
                 fromUsername: actor?.username ? String(actor.username) : undefined,
+                fromProfilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
                 type: 'follow_request',
                 message,
             });
@@ -148,6 +149,7 @@ const followUser = async (req, res) => {
             id: String(doc._id),
             type: 'follow_request',
             username: toSafeUsername(actor?.username),
+            profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
             message,
             fromUserId: String(userId),
             createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
@@ -197,7 +199,7 @@ const unfollowUser = async (req, res) => {
                     { session }
                 );
 
-                actor = await User.findById(userId).select('_id username').session(session).lean();
+                actor = await User.findById(userId).select('_id username profilePicture').session(session).lean();
                 const message = 'removed connection';
                 const created = await Notification.create(
                     [
@@ -205,6 +207,7 @@ const unfollowUser = async (req, res) => {
                             toUserId: targetUserId,
                             fromUserId: userId,
                             fromUsername: actor?.username ? String(actor.username) : undefined,
+                            fromProfilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
                             type: 'unfollow',
                             message,
                         },
@@ -221,6 +224,7 @@ const unfollowUser = async (req, res) => {
             id: String(doc._id),
             type: 'unfollow',
             username: toSafeUsername(actor?.username),
+            profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
             message,
             fromUserId: String(userId),
             createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
@@ -249,6 +253,7 @@ const acceptFollowRequest = async (req, res) => {
         let requester = null;
         let currentUser = null;
         let doc;
+        const acceptedMessage = 'accepted your follow request';
 
         const session = await mongoose.startSession();
         try {
@@ -268,6 +273,21 @@ const acceptFollowRequest = async (req, res) => {
                         .lean();
 
                     if (!requestDoc?._id) {
+                        if (requesterUserId && mongoose.Types.ObjectId.isValid(requesterUserId)) {
+                            const connected = await User.findOne({
+                                _id: userId,
+                                following: requesterUserId,
+                                followers: requesterUserId,
+                            })
+                                .select('_id')
+                                .session(session)
+                                .lean();
+
+                            if (connected?._id) {
+                                throw Object.assign(new Error('Follow request already accepted'), { statusCode: 200 });
+                            }
+                        }
+
                         throw Object.assign(new Error('Follow request not found'), { statusCode: 404 });
                     }
 
@@ -281,12 +301,12 @@ const acceptFollowRequest = async (req, res) => {
                     throw Object.assign(new Error('Invalid requesterUserId'), { statusCode: 400 });
                 }
 
-                requester = await User.findById(requesterUserId).select('_id username').session(session).lean();
+                requester = await User.findById(requesterUserId).select('_id username profilePicture').session(session).lean();
                 if (!requester?._id) {
                     throw Object.assign(new Error('Requester user not found'), { statusCode: 404 });
                 }
 
-                currentUser = await User.findById(userId).select('_id username').session(session).lean();
+                currentUser = await User.findById(userId).select('_id username profilePicture').session(session).lean();
                 if (!currentUser?._id) {
                     throw Object.assign(new Error('Current user not found'), { statusCode: 404 });
                 }
@@ -322,15 +342,15 @@ const acceptFollowRequest = async (req, res) => {
                     { session }
                 );
 
-                const message = 'accepted your follow request';
                 const created = await Notification.create(
                     [
                         {
                             toUserId: requesterUserId,
                             fromUserId: userId,
                             fromUsername: currentUser?.username ? String(currentUser.username) : undefined,
+                            fromProfilePicture: currentUser?.profilePicture ? String(currentUser.profilePicture) : '',
                             type: 'follow_accept',
-                            message,
+                            message: acceptedMessage,
                         },
                     ],
                     { session }
@@ -339,6 +359,9 @@ const acceptFollowRequest = async (req, res) => {
             });
         } catch (err) {
             const statusCode = Number(err?.statusCode);
+            if (statusCode === 200) {
+                return res.status(200).json({ message: err.message, alreadyAccepted: true });
+            }
             if (statusCode >= 400 && statusCode < 500) {
                 return res.status(statusCode).json({ message: err.message });
             }
@@ -351,7 +374,8 @@ const acceptFollowRequest = async (req, res) => {
             id: String(doc._id),
             type: 'follow_accept',
             username: toSafeUsername(currentUser?.username),
-            message,
+            profilePicture: currentUser?.profilePicture ? String(currentUser.profilePicture) : '',
+            message: acceptedMessage,
             fromUserId: String(userId),
             createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
         };
@@ -363,6 +387,7 @@ const acceptFollowRequest = async (req, res) => {
             connectedUser: {
                 id: String(requester._id),
                 username: toSafeUsername(requester.username),
+                profilePicture: requester?.profilePicture ? String(requester.profilePicture) : '',
             },
         });
     } catch (err) {
@@ -399,6 +424,21 @@ const rejectFollowRequest = async (req, res) => {
                     );
 
                     if (!result?.deletedCount) {
+                        if (requesterUserIdFromBody && mongoose.Types.ObjectId.isValid(requesterUserIdFromBody)) {
+                            const connected = await User.findOne({
+                                _id: userId,
+                                following: requesterUserIdFromBody,
+                                followers: requesterUserIdFromBody,
+                            })
+                                .select('_id')
+                                .session(session)
+                                .lean();
+
+                            if (connected?._id) {
+                                throw Object.assign(new Error('Follow request already processed'), { statusCode: 200 });
+                            }
+                        }
+
                         throw Object.assign(new Error('Follow request not found'), { statusCode: 404 });
                     }
                     return;
@@ -419,6 +459,9 @@ const rejectFollowRequest = async (req, res) => {
             });
         } catch (err) {
             const statusCode = Number(err?.statusCode);
+            if (statusCode === 200) {
+                return res.status(200).json({ message: err.message, alreadyProcessed: true });
+            }
             if (statusCode >= 400 && statusCode < 500) {
                 return res.status(statusCode).json({ message: err.message });
             }
@@ -455,7 +498,7 @@ const getMutualConnections = async (req, res) => {
                     let: { mutualIds: '$mutualIds' },
                     pipeline: [
                         { $match: { $expr: { $in: ['$_id', '$$mutualIds'] } } },
-                        { $project: { _id: 1, username: 1 } },
+                        { $project: { _id: 1, username: 1, profilePicture: 1 } },
                         ...(escapedQuery
                             ? [{ $match: { username: { $regex: escapedQuery, $options: 'i' } } }]
                             : []),
@@ -475,6 +518,7 @@ const getMutualConnections = async (req, res) => {
         const connections = rawConnections.map((u) => ({
             id: String(u._id),
             username: toSafeUsername(u.username),
+            profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
             message: 'Connected',
         }));
 

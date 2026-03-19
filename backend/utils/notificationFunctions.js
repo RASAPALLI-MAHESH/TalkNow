@@ -50,7 +50,7 @@ const getNotifications = async (req, res) => {
         const notifications = await Notification.find({ toUserId: userId })
             .sort({ createdAt: -1 })
             .limit(limit)
-            .select('_id toUserId fromUserId fromUsername type message createdAt')
+            .select('_id toUserId fromUserId fromUsername fromProfilePicture type message createdAt')
             .lean();
 
         const missingUsernameIds = Array.from(
@@ -62,10 +62,17 @@ const getNotifications = async (req, res) => {
             )
         );
 
-        const userIdToUsername = new Map();
+        const userIdToProfile = new Map();
         if (missingUsernameIds.length > 0) {
-            const users = await User.find({ _id: { $in: missingUsernameIds } }).select('_id username').lean();
-            for (const u of users) userIdToUsername.set(String(u._id), u.username ? String(u.username) : 'User');
+            const users = await User.find({ _id: { $in: missingUsernameIds } })
+                .select('_id username profilePicture')
+                .lean();
+            for (const u of users) {
+                userIdToProfile.set(String(u._id), {
+                    username: u.username ? String(u.username) : 'User',
+                    profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
+                });
+            }
         }
 
         const normalized = notifications.map((n) => {
@@ -73,9 +80,16 @@ const getNotifications = async (req, res) => {
             const username =
                 typeof n.fromUsername === 'string' && n.fromUsername.trim().length > 0
                     ? n.fromUsername.trim()
-                    : fromUserId && userIdToUsername.has(fromUserId)
-                        ? userIdToUsername.get(fromUserId)
+                    : fromUserId && userIdToProfile.has(fromUserId)
+                        ? userIdToProfile.get(fromUserId).username
                         : 'User';
+
+            const profilePicture =
+                typeof n.fromProfilePicture === 'string' && n.fromProfilePicture.trim().length > 0
+                    ? n.fromProfilePicture.trim()
+                    : fromUserId && userIdToProfile.has(fromUserId)
+                        ? String(userIdToProfile.get(fromUserId).profilePicture || '')
+                        : '';
 
             return {
                 id: String(n._id),
@@ -84,6 +98,7 @@ const getNotifications = async (req, res) => {
                 createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : undefined,
                 fromUserId,
                 username,
+                profilePicture,
             };
         });
 

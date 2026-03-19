@@ -1,8 +1,9 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 type FollowRequestComponentProps = {
     username: string;
+    profilePicture?: string;
     message?: string;
     onAccept?: () => void;
     onReject?: () => void;
@@ -10,6 +11,7 @@ type FollowRequestComponentProps = {
 
 const FollowRequestComponent = ({
     username,
+    profilePicture,
     message = 'sent you a follow request',
     onAccept,
     onReject,
@@ -20,9 +22,13 @@ const FollowRequestComponent = ({
         <View style={styles.wrap}>
             <View style={styles.card}>
                 <View style={styles.topRow}>
-                    <View style={styles.avatar}>
-                        <Text style={styles.avatarText}>{initial}</Text>
-                    </View>
+                    {typeof profilePicture === 'string' && profilePicture.trim().length > 0 ? (
+                        <Image source={{ uri: profilePicture.trim() }} style={styles.avatarImage} />
+                    ) : (
+                        <View style={styles.avatar}>
+                            <Text style={styles.avatarText}>{initial}</Text>
+                        </View>
+                    )}
 
                     <View style={styles.content}>
                         <Text style={styles.username} numberOfLines={1}>
@@ -100,6 +106,13 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         backgroundColor: '#e9e2ff',
         marginRight: 12,
+    },
+    avatarImage: {
+        width: 46,
+        height: 46,
+        borderRadius: 23,
+        marginRight: 12,
+        backgroundColor: '#e9e2ff',
     },
     avatarText: {
         color: '#350d81',
