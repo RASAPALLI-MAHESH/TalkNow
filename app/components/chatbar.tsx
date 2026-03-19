@@ -1,6 +1,7 @@
 export type ChatListItem = {
   id: string;
   name: string;
+  profilePicture?: string;
   lastMessage: string;
   Date: string;
 };

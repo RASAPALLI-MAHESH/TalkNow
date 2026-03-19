@@ -25,6 +25,7 @@ type Params = {
     otp: string;
     username: string;
     avatarUri?: string;
+    profilePicture?: string;
 };
 
 const PasswordSetup = ({ route, navigation }: { route: { params?: Params }; navigation: any }) => {
@@ -35,6 +36,7 @@ const PasswordSetup = ({ route, navigation }: { route: { params?: Params }; navi
     const otp = String(route?.params?.otp ?? '').trim();
     const username = String(route?.params?.username ?? '').trim();
     const avatarUri = String(route?.params?.avatarUri ?? '').trim();
+    const profilePicture = String(route?.params?.profilePicture ?? avatarUri).trim();
 
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -70,7 +72,7 @@ const PasswordSetup = ({ route, navigation }: { route: { params?: Params }; navi
 
         try {
             setLoading(true);
-            await signUp(Firstname, email, username, password, otp, avatarUri);
+            await signUp(Firstname, email, username, password, otp, profilePicture);
             // Auth state updates in context and RootNavigator takes user to MainTabs.
         } catch (error: any) {
             Alert.alert('Signup failed', getAuthErrorMessage(error, 'Could not create account. Try again.'));

@@ -1,6 +1,13 @@
 import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
 import useAuth from '@/hooks/useAuth';
-import { followUser, getAuthErrorMessage, getUnreadNotificationCount, unfollowUser } from '@/services/AuthService';
+import {
+    followUser,
+    getAuthErrorMessage,
+    getMutualConnections,
+    getUnreadNotificationCount,
+    unfollowUser,
+    type MutualConnectionDto,
+} from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -59,6 +66,40 @@ const pickValidUserId = (userLike: any): string => {
     const candidate = userLike?.id ?? userLike?._id ?? userLike?.userId;
     const id = extractMongoObjectId(candidate);
     return MONGO_OBJECT_ID_RE.test(id) ? id : '';
+};
+
+const mergeChatsById = (incoming: ChatListItem[], existing: ChatListItem[]) => {
+    const byId = new Map<string, ChatListItem>();
+    for (const item of existing) byId.set(String(item.id), item);
+
+    for (const next of incoming) {
+        const id = String(next.id);
+        const prev = byId.get(id);
+        if (!prev) {
+            byId.set(id, next);
+            continue;
+        }
+
+        byId.set(id, {
+            ...prev,
+            ...next,
+            // Never lose the latest message preview/date if the incoming connection row is generic.
+            lastMessage: next.lastMessage && next.lastMessage !== 'Connected' ? next.lastMessage : prev.lastMessage,
+            Date: next.Date ? next.Date : prev.Date,
+            profilePicture:
+                typeof next.profilePicture === 'string' && next.profilePicture.trim().length > 0
+                    ? next.profilePicture
+                    : prev.profilePicture,
+        });
+    }
+
+    const merged = Array.from(byId.values());
+    merged.sort((a, b) => {
+        const ta = a.Date ? Date.parse(a.Date) : 0;
+        const tb = b.Date ? Date.parse(b.Date) : 0;
+        return tb - ta;
+    });
+    return merged;
 };
 
 const inferDevServerBaseUrl = (): string | null => {
@@ -229,9 +270,13 @@ const ChatRow = ({
                 />
             </View>
 
-            <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
-            </View>
+            {typeof item.profilePicture === 'string' && item.profilePicture.trim().length > 0 ? (
+                <Image source={{ uri: item.profilePicture.trim() }} style={styles.avatarImage} />
+            ) : (
+                <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
+                </View>
+            )}
 
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
@@ -302,7 +347,7 @@ const GlobalChatRow = ({
 };
 
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
-    useWebSocketClient();
+    const { lastMessage } = useWebSocketClient();
 
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
@@ -320,6 +365,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
     const [followingById, setFollowingById] = useState<Record<string, boolean>>({});
     const [followPendingById, setFollowPendingById] = useState<Record<string, boolean>>({});
+    const [chatRows, setChatRows] = useState<ChatListItem[]>(ChatBar);
 
     const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
 
@@ -330,6 +376,30 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
+
+    const loadChatsFromConnections = useCallback(async () => {
+        if (!currentUserId) {
+            setChatRows([]);
+            return;
+        }
+
+        try {
+            const res = await getMutualConnections();
+            const list = Array.isArray((res as any)?.connections) ? ((res as any).connections as MutualConnectionDto[]) : [];
+
+            const incoming: ChatListItem[] = list.map((u) => ({
+                id: String(u.id),
+                name: String(u.username ?? 'User'),
+                profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
+                lastMessage: 'Connected',
+                Date: '',
+            }));
+
+            setChatRows((prev) => mergeChatsById(incoming, prev));
+        } catch (err: any) {
+            console.log('chat connection hydrate error:', err?.message ?? String(err));
+        }
+    }, [currentUserId]);
 
     const checkUnreadNotifications = useCallback(async () => {
         if (!currentUserId) {
@@ -354,9 +424,11 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
         const start = () => {
             void checkUnreadNotifications();
+            void loadChatsFromConnections();
             if (interval) clearInterval(interval);
             interval = setInterval(() => {
                 void checkUnreadNotifications();
+                void loadChatsFromConnections();
             }, 20000);
         };
 
@@ -376,7 +448,44 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             if (typeof unsubFocus === 'function') unsubFocus();
             if (typeof unsubBlur === 'function') unsubBlur();
         };
-    }, [navigation, checkUnreadNotifications]);
+    }, [navigation, checkUnreadNotifications, loadChatsFromConnections]);
+
+    useEffect(() => {
+        const type = String((lastMessage as any)?.type ?? '');
+        if (type !== 'new_message' && type !== 'sent') return;
+
+        const from = String((lastMessage as any)?.from ?? '').trim();
+        const to = String((lastMessage as any)?.to ?? '').trim();
+        const content = String((lastMessage as any)?.content ?? '').trim();
+        const date = String((lastMessage as any)?.date ?? new Date().toISOString());
+
+        if (!from || !to || !currentUserId) return;
+
+        const peerId = from === currentUserId ? to : from;
+        if (!peerId) return;
+
+        setChatRows((prev) => {
+            const idx = prev.findIndex((row) => String(row.id) === peerId);
+            if (idx === -1) {
+                const created: ChatListItem = {
+                    id: peerId,
+                    name: 'User',
+                    profilePicture: '',
+                    lastMessage: content || 'New message',
+                    Date: date,
+                };
+                return mergeChatsById([created], prev);
+            }
+
+            const updated = [...prev];
+            updated[idx] = {
+                ...updated[idx],
+                lastMessage: content || 'New message',
+                Date: date,
+            };
+            return mergeChatsById([], updated);
+        });
+    }, [lastMessage, currentUserId]);
 
     useEffect(() => {
         Animated.timing(modeAnim, {
@@ -493,12 +602,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
     const filteredChats: ChatListItem[] = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return ChatBar;
-        return ChatBar.filter((item) => {
+        if (!q) return chatRows;
+        return chatRows.filter((item) => {
             const haystack = `${String(item.name ?? '')} ${String(item.lastMessage ?? '')}`.toLowerCase();
             return haystack.includes(q);
         });
-    }, [query]);
+    }, [query, chatRows]);
 
     const globalAsChatRows: GlobalChatListItem[] = useMemo(() => {
         return globalResults.map((u, index) => {
@@ -569,7 +678,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                             : 'Try a different search term.'
                     : query.trim()
                         ? 'Try a different search term.'
-                        : 'Start a conversation to see it here.'}
+                        : 'Accepted connections and new messages will appear here in realtime.'}
             </Text>
         </View>
     );
@@ -578,7 +687,13 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const renderChatItem = ({ item }: { item: ChatListItem }) => (
         <ChatRow
             item={item}
-            onPress={() => navigation.navigate('Chatroom')}
+            onPress={() =>
+                navigation.navigate('Chatroom', {
+                    peerId: item.id,
+                    peerUsername: item.name,
+                    peerAvatar: item.profilePicture,
+                })
+            }
         />
     );
 

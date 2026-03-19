@@ -24,11 +24,16 @@ const normalizeFirstname = (value) => String(value ?? '').trim();
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,24}$/;
 const PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).{6,72}$/;
+const MAX_PROFILE_PICTURE_CHARS = 8 * 1024 * 1024;
 
 const isValidProfilePicture = (value) => {
     if (!value) return true;
-    if (value.length > 2048) return false;
-    return /^https?:\/\//i.test(value) || /^file:\/\//i.test(value);
+    if (value.length > MAX_PROFILE_PICTURE_CHARS) return false;
+    return (
+        /^https?:\/\//i.test(value) ||
+        /^file:\/\//i.test(value) ||
+        /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(value)
+    );
 };
 
 const asMongoDuplicateKeyMessage = (err) => {
@@ -212,7 +217,12 @@ exports.login = async (req, res) => {
         res.status(200).json({
             message: "Login successful", 
             token, 
-            user: { id: existingUser._id, username: existingUser.username, email: existingUser.email }
+            user: {
+                id: existingUser._id,
+                username: existingUser.username,
+                email: existingUser.email,
+                profilePicture: existingUser.profilePicture,
+            }
         });
     } catch(err) {
         res.status(500).json({message: "Server error", error: err.message});

@@ -178,10 +178,19 @@ export const verifySignupOtp = async (email: string, otp: string): Promise<AuthR
 };
 
 export const checkUsernameAvailability = async (username: string): Promise<{ available: boolean; message?: string }> => {
-    const response = await client.get('/check-username', {
-        params: { username: username.trim() },
-    });
-    return response.data;
+    try {
+        const response = await client.get('/check-username', {
+            params: { username: username.trim() },
+        });
+        return response.data;
+    } catch (error: any) {
+        // Backward compatibility: if server is not yet updated with this endpoint,
+        // don't block onboarding. Validation still runs on final /signup.
+        if (Number(error?.response?.status) === 404) {
+            return { available: true, message: 'Username check endpoint unavailable; continuing with signup validation.' };
+        }
+        throw error;
+    }
 };
 
 export const signUp = async (

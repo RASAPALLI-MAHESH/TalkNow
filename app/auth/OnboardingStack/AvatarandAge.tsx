@@ -25,6 +25,7 @@ type RouteParams = {
 	email: string;
 	otp: string;
 	avatarUri?: string;
+	profilePicture?: string;
 	username?: string;
 };
 
@@ -33,9 +34,11 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 	const email = String(route?.params?.email ?? '').trim();
 	const otp = String(route?.params?.otp ?? '').trim();
 	const [avatarUri, setAvatarUri] = useState(String(route?.params?.avatarUri ?? ''));
+	const [profilePicturePayload, setProfilePicturePayload] = useState(String(route?.params?.profilePicture ?? route?.params?.avatarUri ?? ''));
 	const [username, setUsername] = useState(String(route?.params?.username ?? ''));
 	const [checking, setChecking] = useState(false);
 	const [helper, setHelper] = useState('This username will be visible across the app.');
+	const scrollRef = React.useRef<ScrollView | null>(null);
 
 	const trimmedUsername = useMemo(() => username.trim(), [username]);
 	const usernameFormatValid = /^[a-zA-Z0-9_]{3,24}$/.test(trimmedUsername);
@@ -52,11 +55,19 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 				mediaTypes: ['images'],
 				allowsEditing: true,
 				aspect: [1, 1],
+				base64: true,
 				quality: 0.9,
 			});
 
 			if (!result.canceled && result.assets?.[0]?.uri) {
-				setAvatarUri(result.assets[0].uri);
+				const asset = result.assets[0];
+				setAvatarUri(asset.uri);
+				if (typeof asset.base64 === 'string' && asset.base64.length > 0) {
+					const mimeType = typeof asset.mimeType === 'string' && asset.mimeType.length > 0 ? asset.mimeType : 'image/jpeg';
+					setProfilePicturePayload(`data:${mimeType};base64,${asset.base64}`);
+				} else {
+					setProfilePicturePayload(asset.uri);
+				}
 			}
 		} catch (_err) {
 			Alert.alert('Image error', 'Could not open gallery. Please try again.');
@@ -83,7 +94,11 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 				Alert.alert('Username unavailable', 'Try a different username.');
 				return;
 			}
-			setHelper('Great choice. This username is available.');
+			if (typeof result?.message === 'string' && result.message.includes('endpoint unavailable')) {
+				setHelper('Proceeding. Username will be verified at account creation.');
+			} else {
+				setHelper('Great choice. This username is available.');
+			}
 		} catch (error: any) {
 			Alert.alert('Check failed', getAuthErrorMessage(error, 'Could not verify username right now.'));
 			return;
@@ -96,9 +111,10 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 			email,
 			otp,
 			avatarUri,
+			profilePicture: profilePicturePayload,
 			username: trimmedUsername,
 		});
-	}, [Firstname, email, otp, usernameFormatValid, navigation, avatarUri, trimmedUsername]);
+	}, [Firstname, email, otp, usernameFormatValid, navigation, avatarUri, profilePicturePayload, trimmedUsername]);
 
 	return (
 		<>
@@ -107,11 +123,14 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 				<TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
 					<KeyboardAvoidingView
 						style={styles.safe}
-						behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+						behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+						keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
 					>
 						<ScrollView
+							ref={scrollRef}
 							contentContainerStyle={styles.content}
 							keyboardShouldPersistTaps="handled"
+							keyboardDismissMode="interactive"
 							showsVerticalScrollIndicator={false}
 						>
 							<LinearGradient
@@ -152,6 +171,11 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 									onChangeText={(value) => {
 										setUsername(value);
 										setHelper('This username will be visible across the app.');
+									}}
+									onFocus={() => {
+										setTimeout(() => {
+											scrollRef.current?.scrollTo({ y: 260, animated: true });
+										}, 80);
 									}}
 									autoCapitalize="none"
 									autoCorrect={false}
@@ -200,7 +224,7 @@ const styles = StyleSheet.create({
 		alignItems: 'center',
 		paddingHorizontal: 24,
 		paddingTop: 20,
-		paddingBottom: 36,
+		paddingBottom: 18,
 	},
 	hero: {
 		width: '100%',
@@ -300,10 +324,11 @@ const styles = StyleSheet.create({
 		color: '#0d7f4d',
 	},
 	footerButtons: {
-		marginTop: 'auto',
+		marginTop: 24,
 		width: '100%',
 		flexDirection: 'row',
 		gap: 12,
+		paddingBottom: 8,
 	},
 	skipButton: {
 		flex: 1,
