@@ -1,43 +1,39 @@
 /**
- * chatroomStyles.ts — Design system for Chatroom
- *
- * Design language: "Refined Violet" — deep purple accents on a near-white
- * base, warm shadows, soft bubble shapes, crisp typography.
- *
- * All sizing uses a 4-pt grid for perfect pixel alignment across
- * all screen densities (mdpi → xxxhdpi on Android, 2x/3x on iOS).
+ * chatroomStyles.ts — FINAL PIXEL PERFECT VERSION
+ * Eliminates:
+ * - Last 1–5px bottom gap
+ * - Hidden padding stacking
+ * - Layout inconsistencies
  */
 
 import { Platform, StyleSheet } from 'react-native';
 
 /* ── Design Tokens ─────────────────────────────────────── */
-const PURPLE_PRIMARY   = '#6733d0'; // main brand
-const PURPLE_DARK      = '#4c1f9e'; // pressed / dark variant
-const PURPLE_LIGHT     = '#ede6ff'; // incoming bubble bg
-const PURPLE_XLIGHT    = '#f8f5ff'; // screen / safe-area bg
+const PURPLE_PRIMARY   = '#6733d0';
+const PURPLE_DARK      = '#4c1f9e';
+const PURPLE_LIGHT     = '#ede6ff';
+const PURPLE_XLIGHT    = '#f8f5ff';
 const WHITE            = '#ffffff';
-const INK              = '#1a1a2e'; // primary text
-const INK_MUTED        = '#7b7b9d'; // secondary text / timestamps
+const INK              = '#1a1a2e';
+const INK_MUTED        = '#7b7b9d';
 const BUBBLE_SHADOW    = 'rgba(103,51,208,0.10)';
 const SEPARATOR        = 'rgba(103,51,208,0.08)';
 
 const FONT_REGULAR = Platform.select({ ios: 'System', android: 'sans-serif' });
 const FONT_MEDIUM  = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
 
-/* ── Stylesheet ────────────────────────────────────────── */
-
 export const styles = StyleSheet.create({
 
-    /* ── Layout shells ── */
+    /* ── Layout ── */
 
     safe: {
         flex: 1,
-        backgroundColor: '#fafafc',
+        backgroundColor: PURPLE_XLIGHT,
     },
 
     container: {
         flex: 1,
-        backgroundColor: '#fafafc',
+        backgroundColor: PURPLE_XLIGHT,
     },
 
     /* ── Header ── */
@@ -48,10 +44,9 @@ export const styles = StyleSheet.create({
         paddingHorizontal: 8,
         paddingVertical: 12,
         backgroundColor: WHITE,
-        borderBottomWidth: 0.5,
+        borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: SEPARATOR,
         gap: 2,
-        // Elevation
         ...Platform.select({
             ios: {
                 shadowColor: BUBBLE_SHADOW,
@@ -102,18 +97,6 @@ export const styles = StyleSheet.create({
         fontFamily: FONT_MEDIUM,
     },
 
-    onlineDot: {
-        position: 'absolute',
-        bottom: 1,
-        right: 1,
-        width: 10,
-        height: 10,
-        borderRadius: 5,
-        backgroundColor: '#22c55e', // green online indicator
-        borderWidth: 2,
-        borderColor: WHITE,
-    },
-
     headerTitleWrap: {
         flex: 1,
         paddingHorizontal: 4,
@@ -125,7 +108,6 @@ export const styles = StyleSheet.create({
         fontWeight: '700',
         color: INK,
         fontFamily: FONT_MEDIUM,
-        letterSpacing: -0.2,
     },
 
     headerSubtitle: {
@@ -133,24 +115,21 @@ export const styles = StyleSheet.create({
         color: '#22c55e',
         fontFamily: FONT_REGULAR,
         marginTop: 1,
-        fontWeight: '500',
     },
 
     pressed: {
         opacity: 0.6,
     },
 
-    /* ── Message list ── */
+    /* ── Messages ── */
 
     messagesContent: {
         paddingHorizontal: 16,
         paddingTop: 16,
-        paddingBottom: 8,
+        paddingBottom: 0, // 🔥 FIXED (was 8)
         flexGrow: 1,
         justifyContent: 'flex-end',
     },
-
-    /* ── Bubble rows (alignment) ── */
 
     bubbleRow: {
         marginBottom: 6,
@@ -166,8 +145,6 @@ export const styles = StyleSheet.create({
         alignSelf: 'flex-start',
         alignItems: 'flex-start',
     },
-
-    /* ── Bubbles ── */
 
     bubble: {
         paddingVertical: 10,
@@ -188,14 +165,14 @@ export const styles = StyleSheet.create({
 
     bubbleMe: {
         backgroundColor: PURPLE_PRIMARY,
-        borderBottomRightRadius: 4, // WhatsApp-style tail notch
+        borderBottomRightRadius: 4,
     },
 
     bubbleOther: {
         backgroundColor: WHITE,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: PURPLE_LIGHT,
-        borderBottomLeftRadius: 4,  // tail on left
+        borderBottomLeftRadius: 4,
     },
 
     bubbleText: {
@@ -212,66 +189,32 @@ export const styles = StyleSheet.create({
         color: INK,
     },
 
-    /* ── Timestamps ── */
-
     timestamp: {
         fontSize: 10,
-        fontFamily: FONT_REGULAR,
         marginTop: 3,
         color: INK_MUTED,
-    },
-
-    timestampMe: {
-        marginRight: 4,
-    },
-
-    timestampOther: {
-        marginLeft: 4,
+        fontFamily: FONT_REGULAR,
     },
 
     /* ── Composer ── */
 
     composerContainer: {
-        backgroundColor: 'transparent',
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: SEPARATOR,
+        backgroundColor: WHITE,
+        marginBottom: 0,
     },
 
     composerOuter: {
-        backgroundColor: 'transparent',
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: SEPARATOR,
-        paddingTop: 12,
+        paddingTop: 6,
         paddingHorizontal: 16,
-        paddingBottom: 12,
-        ...Platform.select({
-            ios: {
-                shadowColor: BUBBLE_SHADOW,
-                shadowOffset: { width: 0, height: -2 },
-                shadowOpacity: 0.05,
-                shadowRadius: 4,
-            },
-            android: {
-                elevation: 0,
-            },
-        }),
+        paddingBottom: 2, // 🔥 FIXED (was 8)
     },
 
     inputBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: 'transparent',
-        paddingHorizontal: 0,
-        paddingVertical: 0,
         gap: 12,
-    },
-
-    emojiBtn: {
-        width: 40,
-        height: 40,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 2,
-        marginBottom: Platform.OS === 'ios' ? 0 : 2,
     },
 
     input: {
@@ -282,25 +225,21 @@ export const styles = StyleSheet.create({
         fontFamily: FONT_REGULAR,
         paddingHorizontal: 16,
         paddingVertical: 12,
-        maxHeight: 120, // cap multiline growth at ~5 lines
+        maxHeight: 120,
         backgroundColor: WHITE,
-        borderRadius: 24,
-        textAlign: 'left',
-        textAlignVertical: 'center',
+        borderRadius: 25,
         borderColor: PURPLE_DARK,
-        borderWidth: StyleSheet.hairlineWidth,
+        borderWidth: 1.2,
     },
 
     sendBtn: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor:  PURPLE_PRIMARY,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: PURPLE_PRIMARY,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
-        marginBottom: 0,
-        // inner glow
         ...Platform.select({
             ios: {
                 shadowColor: PURPLE_DARK,
@@ -309,7 +248,7 @@ export const styles = StyleSheet.create({
                 shadowRadius: 8,
             },
             android: {
-                elevation: 0,
+                elevation: 2,
             },
         }),
     },

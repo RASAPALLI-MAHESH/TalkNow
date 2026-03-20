@@ -83,8 +83,10 @@ server.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }))
 
-// 5. Body parser with a strict size limit to prevent large payload memory attacks
-server.use(express.json({ limit: '10kb' }));
+// 5. Body parser limits: allow avatar/profile payloads during signup while keeping finite caps.
+// If avatars are sent as base64 data URIs, 10kb is too small and causes HTTP 413.
+server.use(express.json({ limit: '8mb' }));
+server.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 server.use("/api/auth", authRoutes)
 

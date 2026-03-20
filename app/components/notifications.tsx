@@ -582,7 +582,11 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                                             accessibilityRole="button"
                                             accessibilityLabel={`Message ${item.username}`}
                                             onPress={() => {
-                                                navigation.navigate('Chatroom');
+                                                navigation.navigate('Chatroom', {
+                                                    peerId: item.id,
+                                                    peerUsername: item.username,
+                                                    peerAvatar: item.profilePicture,
+                                                });
                                             }}
                                         >
                                             <Text style={styles.collectionActionButtonText}>Message</Text>

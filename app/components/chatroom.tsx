@@ -14,23 +14,24 @@
  */
 
 import AvatarPicker from '@/app/components/AvatarPicker';
+import MessageBubble from '@/app/components/messageComponent';
 import useAuth from '@/hooks/useAuth';
 import { getConversationMessages } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import React, {
-    memo,
     useCallback,
     useEffect,
     useMemo,
     useRef,
-    useState,
+    useState
 } from 'react';
 import {
     Animated,
     FlatList,
     Keyboard,
     KeyboardAvoidingView,
+    KeyboardEvent,
     LayoutAnimation,
     Platform,
     Pressable,
@@ -41,7 +42,7 @@ import {
     UIManager,
     View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { styles } from './chatroomStyles';
 
 // Enable LayoutAnimation on Android
@@ -56,62 +57,8 @@ export type ChatMessage = {
     text: string;
     sender: 'me' | 'other';
     createdAt: string;
+    status?: 'sending' | 'sent' | 'delivered' | 'read';
 };
-
-/* ─────────────────────── Helpers ─────────────────────── */
-
-function formatTime(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-/* ─────────────────────── Animated Bubble ─────────────────────── */
-
-interface BubbleProps {
-    item: ChatMessage;
-}
-
-const AnimatedBubble = memo(({ item }: BubbleProps) => {
-    const translateY = useRef(new Animated.Value(18)).current;
-    const opacity = useRef(new Animated.Value(0)).current;
-
-    useEffect(() => {
-        Animated.parallel([
-            Animated.spring(translateY, {
-                toValue: 0,
-                useNativeDriver: true,
-                tension: 80,
-                friction: 10,
-            }),
-            Animated.timing(opacity, {
-                toValue: 1,
-                duration: 200,
-                useNativeDriver: true,
-            }),
-        ]).start();
-    }, []); // run once on mount
-
-    const isMe = item.sender === 'me';
-
-    return (
-        <Animated.View
-            style={[
-                styles.bubbleRow,
-                isMe ? styles.bubbleRowMe : styles.bubbleRowOther,
-                { opacity, transform: [{ translateY }] },
-            ]}
-        >
-            <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
-                <Text style={[styles.bubbleText, isMe ? styles.bubbleTextMe : styles.bubbleTextOther]}>
-                    {item.text}
-                </Text>
-            </View>
-            <Text style={[styles.timestamp, isMe ? styles.timestampMe : styles.timestampOther]}>
-                {formatTime(item.createdAt)}
-            </Text>
-        </Animated.View>
-    );
-});
 
 /* ─────────────────────── Main Screen ─────────────────────── */
 
@@ -123,6 +70,7 @@ interface ChatroomProps {
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
     const { lastMessage, sendMessage } = useWebSocketClient();
+    const insets = useSafeAreaInsets();
 
     const peerId = String(route?.params?.peerId ?? '').trim();
     const peerUsername = String(route?.params?.peerUsername ?? 'Chat').trim() || 'Chat';
@@ -135,14 +83,43 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const [isFocused, setIsFocused] = useState(false);
     const listRef = useRef<FlatList<ChatMessage>>(null);
 
-    /* Send-button animation */
-    const sendScale = useRef(new Animated.Value(1)).current;
+    /* Send-button state */
     const sendOpacity = useRef(new Animated.Value(0.35)).current;
 
     /* Input border animation */
     const borderAnim = useRef(new Animated.Value(0)).current;
 
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [oldestMessageDate, setOldestMessageDate] = useState<string | null>(null);
+    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+    useEffect(() => {
+        const onKeyboardShow = (event: KeyboardEvent) => {
+            const rawHeight = Number(event?.endCoordinates?.height ?? 0);
+            const nextHeight = Math.max(rawHeight - Math.max(insets.bottom, 0), 0);
+            setKeyboardHeight(nextHeight);
+        };
+
+        const onKeyboardHide = () => {
+            setKeyboardHeight(0);
+        };
+
+        const showSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            onKeyboardShow
+        );
+        const hideSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            onKeyboardHide
+        );
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, [insets.bottom]);
 
     useEffect(() => {
         let mounted = true;
@@ -150,7 +127,11 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         const hydrateConversation = async () => {
             if (!peerId) return;
             try {
-                const res = await getConversationMessages(peerId);
+                setMessages([]);
+                setOldestMessageDate(null);
+                setHasMoreMessages(true);
+                
+                const res = await getConversationMessages(peerId, undefined);
                 if (!mounted) return;
 
                 const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
@@ -160,7 +141,17 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                     sender: m?.sender === 'me' ? 'me' : 'other',
                     createdAt: String(m?.createdAt ?? new Date().toISOString()),
                 }));
+                
                 setMessages(normalized);
+                
+                // Track oldest message for pagination
+                if (normalized.length > 0) {
+                    const oldestMsg = normalized[0];
+                    setOldestMessageDate(oldestMsg.createdAt);
+                    setHasMoreMessages(normalized.length >= 50);
+                } else {
+                    setHasMoreMessages(false);
+                }
             } catch (err: any) {
                 console.log('conversation hydrate error:', err?.message ?? String(err));
             }
@@ -243,13 +234,55 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         ]).start();
     }, []);
 
-    /* Scroll to end when messages change */
+    /* Scroll to end on initial load or new messages */
+    const shouldAutoScroll = useRef(true);
     useEffect(() => {
-        const timer = setTimeout(() => {
-            listRef.current?.scrollToEnd({ animated: true });
-        }, 80);
-        return () => clearTimeout(timer);
+        if (shouldAutoScroll.current && messages.length > 0) {
+            const timer = setTimeout(() => {
+                listRef.current?.scrollToEnd({ animated: false });
+            }, 50);
+            return () => clearTimeout(timer);
+        }
     }, [messages.length]);
+
+    /* Load older messages when user scrolls to top */
+    const handleLoadMore = useCallback(async () => {
+        if (loadingMore || !hasMoreMessages || !oldestMessageDate || !peerId) return;
+        
+        setLoadingMore(true);
+        try {
+            const res = await getConversationMessages(peerId, oldestMessageDate);
+            const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
+            
+            if (incoming.length === 0) {
+                setHasMoreMessages(false);
+                return;
+            }
+            
+            const normalized: ChatMessage[] = incoming.map((m: any) => ({
+                id: String(m?.id ?? Date.now()),
+                text: String(m?.text ?? ''),
+                sender: m?.sender === 'me' ? 'me' : 'other',
+                createdAt: String(m?.createdAt ?? new Date().toISOString()),
+            }));
+            
+            setMessages((prev) => [...normalized, ...prev]);
+            
+            if (normalized.length > 0) {
+                setOldestMessageDate(normalized[0].createdAt);
+            }
+            
+            if (normalized.length < 50) {
+                setHasMoreMessages(false);
+            }
+            
+            shouldAutoScroll.current = false;
+        } catch (err: any) {
+            console.log('load more error:', err?.message ?? String(err));
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [loadingMore, hasMoreMessages, oldestMessageDate, peerId]);
 
     const handleBack = useCallback(() => {
         Keyboard.dismiss();
@@ -266,11 +299,8 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         }
 
-        /* Send button spring press */
-        Animated.sequence([
-            Animated.spring(sendScale, { toValue: 0.82, useNativeDriver: true, speed: 50 }),
-            Animated.spring(sendScale, { toValue: 1, useNativeDriver: true, speed: 28, bounciness: 12 }),
-        ]).start();
+        /* Quick send confirm */
+        // Send immediately, no animation needed
 
         const ok = sendMessage(peerId, text);
         if (!ok) {
@@ -279,7 +309,15 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     }, [canSend, draft, peerId, sendMessage]);
 
     const renderItem = useCallback(
-        ({ item }: { item: ChatMessage }) => <AnimatedBubble item={item} />,
+        ({ item }: { item: ChatMessage }) => (
+            <MessageBubble
+                id={item.id}
+                text={item.text}
+                sender={item.sender}
+                createdAt={item.createdAt}
+                status={item.status || 'sent'}
+            />
+        ),
         [],
     );
 
@@ -317,7 +355,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                     previewEnabled
                 />
                 {/* Online dot */}
-                <View style={styles.onlineDot} />
+                {/* <View style={styles.onlineDot} /> */}
             </Pressable>
 
             <Pressable
@@ -351,7 +389,13 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
     /* ── Shared Composer ── */
     const Composer = (
-        <SafeAreaView edges={['bottom']} style={styles.composerContainer}>
+        <View
+            style={[
+                styles.composerContainer,
+                { paddingBottom: Math.max(insets.bottom, 4) },
+                Platform.OS === 'android' && { marginBottom: keyboardHeight },
+            ]}
+        >
             <View style={styles.composerOuter}>
                 <Animated.View style={[styles.inputBar, { borderColor: animatedBorderColor }]}>
 
@@ -382,68 +426,69 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 </Pressable> */}
 
                 {/* Send button */}
-                <Animated.View style={{ transform: [{ scale: sendScale }], opacity: sendOpacity }}>
-                    <Pressable
-                        onPress={handleSend}
-                        disabled={!canSend}
-                        style={styles.sendBtn}
-                        android_ripple={{ color: 'rgba(255,255,255,0.3)', borderless: false }}
-                        hitSlop={6}
-                        accessibilityRole="button"
-                        accessibilityLabel="Send message"
-                    >
-                        <Ionicons name="send" size={18} color="#fff" />
-                    </Pressable>
-                </Animated.View>
+                <Pressable
+                    onPress={handleSend}
+                    disabled={!canSend}
+                    style={[styles.sendBtn, { opacity: canSend ? 1 : 0.35 }]}
+                    android_ripple={{ color: 'rgba(255,255,255,0.3)', borderless: false }}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel="Send message"
+                >
+                    <Ionicons name="send" size={18} color="#fff" />
+                </Pressable>
                 </Animated.View>
             </View>
-        </SafeAreaView>
+        </View>
+    );
+
+    const MainContent = (
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <View style={styles.container}>
+                {Header}
+
+                <FlatList
+                    ref={listRef}
+                    data={messages}
+                    keyExtractor={keyExtractor}
+                    renderItem={renderItem}
+                    contentContainerStyle={styles.messagesContent}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    scrollEnabled={true}
+                    nestedScrollEnabled={true}
+                    showsVerticalScrollIndicator={false}
+                    removeClippedSubviews={Platform.OS === 'android'}
+                    initialNumToRender={20}
+                    maxToRenderPerBatch={10}
+                    windowSize={15}
+                    updateCellsBatchingPeriod={30}
+                    onStartReached={handleLoadMore}
+                    onStartReachedThreshold={0.5}
+                />
+
+                {Composer}
+            </View>
+        </TouchableWithoutFeedback>
     );
 
     /* ── Render ── */
     return (
         <>
-            <StatusBar barStyle="dark-content" backgroundColor="#f8f5ff" />
-            <SafeAreaView style={styles.safe} edges={['top']}>
-                <KeyboardAvoidingView
-                    style={styles.safe}
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                    keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
-                >
-                    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-                        <View style={styles.container}>
-                            {Header}
-
-                            <FlatList
-                                ref={listRef}
-                                data={messages}
-                                keyExtractor={keyExtractor}
-                                renderItem={renderItem}
-                                contentContainerStyle={styles.messagesContent}
-                                keyboardShouldPersistTaps="handled"
-                                keyboardDismissMode="interactive"
-                                scrollEnabled={true}
-                                nestedScrollEnabled={true}
-                                showsVerticalScrollIndicator={false}
-                                maintainVisibleContentPosition={{
-                                    minIndexForVisible: 0,
-                                    autoscrollToTopThreshold: 100,
-                                }}
-                                onContentSizeChange={() =>
-                                    listRef.current?.scrollToEnd({ animated: false })
-                                }
-                                /* Performance tuning for million-message scale */
-                                removeClippedSubviews={Platform.OS === 'android'}
-                                initialNumToRender={20}
-                                maxToRenderPerBatch={10}
-                                windowSize={15}
-                                updateCellsBatchingPeriod={30}
-                            />
-
-                            {Composer}
-                        </View>
-                    </TouchableWithoutFeedback>
-                </KeyboardAvoidingView>
+            <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+            <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+                {Platform.OS === 'ios' ? (
+                    <KeyboardAvoidingView
+                        style={styles.safe}
+                        behavior="padding"
+                        keyboardVerticalOffset={0}
+                        enabled
+                    >
+                        {MainContent}
+                    </KeyboardAvoidingView>
+                ) : (
+                    MainContent
+                )}
             </SafeAreaView>
         </>
     );
