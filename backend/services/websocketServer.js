@@ -25,6 +25,8 @@ const emitToUser = (userId, payload) => {
     return false;
 };
 
+const toObjectId = (value) => new mongoose.Types.ObjectId(String(value).trim());
+
 /**
  * Attaches a WebSocket server to an existing HTTP server.
  * Render only exposes a single port, so WS must share the same server.
@@ -49,9 +51,40 @@ const attachWebSocketServer = (httpServer) => {
                         ws.send(JSON.stringify({ type: 'error', message: 'userId is required for register' }));
                         return;
                     }
+                    if (!isValidObjectId(userId)) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Invalid userId for register' }));
+                        return;
+                    }
                     ws.userId = userId;
                     users.set(userId, ws);
                     ws.send(JSON.stringify({ type: 'registered', userId }));
+
+                    // Mark previously queued messages as delivered when receiver comes online.
+                    const undelivered = await Message.find({
+                        receiverId: toObjectId(userId),
+                        deliveredAt: null,
+                    })
+                        .select('_id senderId')
+                        .lean();
+
+                    if (undelivered.length > 0) {
+                        const ids = undelivered.map((m) => m._id);
+                        const deliveredAt = new Date();
+                        await Message.updateMany(
+                            { _id: { $in: ids }, deliveredAt: null },
+                            { $set: { deliveredAt } }
+                        );
+
+                        const deliveredIso = deliveredAt.toISOString();
+                        for (const m of undelivered) {
+                            emitToUser(String(m.senderId), {
+                                type: 'message_status',
+                                id: String(m._id),
+                                status: 'delivered',
+                                date: deliveredIso,
+                            });
+                        }
+                    }
                     return;
                 }
 
@@ -115,14 +148,89 @@ const attachWebSocketServer = (httpServer) => {
                         to,
                         from,
                         content,
+                        clientId: data?.clientId ? String(data.clientId) : undefined,
                         date: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
                     };
 
-                    emitToUser(to, payload);
+                    const deliveredNow = emitToUser(to, payload);
 
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({ type: 'sent', ...payload }));
+                        ws.send(JSON.stringify({
+                            type: 'message_status',
+                            id: String(doc._id),
+                            clientId: data?.clientId ? String(data.clientId) : undefined,
+                            status: 'sent',
+                        }));
                     }
+
+                    if (deliveredNow) {
+                        const deliveredAt = new Date();
+                        await Message.updateOne(
+                            { _id: doc._id, deliveredAt: null },
+                            { $set: { deliveredAt } }
+                        );
+
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'message_status',
+                                id: String(doc._id),
+                                clientId: data?.clientId ? String(data.clientId) : undefined,
+                                status: 'delivered',
+                                date: deliveredAt.toISOString(),
+                            }));
+                        }
+                    }
+                    return;
+                }
+
+                if (data?.type === 'mark_read') {
+                    const readerId = String(ws.userId || '').trim();
+                    const peerId = String(data.peerId || '').trim();
+                    const upTo = String(data.upTo || '').trim();
+
+                    if (!isValidObjectId(readerId) || !isValidObjectId(peerId)) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Invalid peerId/readerId for mark_read' }));
+                        return;
+                    }
+
+                    const pair = normalizePair(readerId, peerId);
+                    const readAt = new Date();
+                    const query = {
+                        conversationKey: pair.pairKey,
+                        senderId: toObjectId(peerId),
+                        receiverId: toObjectId(readerId),
+                        readAt: null,
+                    };
+
+                    if (upTo) {
+                        const d = new Date(upTo);
+                        if (!Number.isNaN(d.getTime())) {
+                            query.createdAt = { $lte: d };
+                        }
+                    }
+
+                    const unread = await Message.find(query)
+                        .select('_id')
+                        .lean();
+
+                    if (unread.length === 0) {
+                        return;
+                    }
+
+                    const ids = unread.map((m) => m._id);
+
+                    await Message.updateMany(
+                        { _id: { $in: ids }, readAt: null },
+                        { $set: { readAt, deliveredAt: readAt } }
+                    );
+
+                    emitToUser(peerId, {
+                        type: 'messages_read',
+                        ids: ids.map((id) => String(id)),
+                        readAt: readAt.toISOString(),
+                        by: readerId,
+                    });
                     return;
                 }
 

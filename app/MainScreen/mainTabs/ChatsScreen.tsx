@@ -18,22 +18,31 @@ import {
     ActivityIndicator,
     Animated,
     FlatList,
+    Keyboard,
     Platform,
     Pressable,
     StyleSheet,
     Text,
     TextInput,
+    TouchableWithoutFeedback,
     View,
     type GestureResponderEvent,
     type LayoutChangeEvent
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SvgXml } from 'react-native-svg';
 
 const MODE_TOGGLE_WIDTH = 104;
 const MODE_TOGGLE_PADDING = 2;
 const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
 
 const NOTIFICATIONS_LAST_SEEN_KEY = 'notificationsLastSeenAt';
+
+const CHAT_HEADER_ICON_XML = `
+<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#6733d0">
+    <path d="M80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"/>
+</svg>
+`;
 
 const formatChatTime = (raw?: string) => {
     if (!raw) return '';
@@ -718,10 +727,21 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
         return <GlobalChatRow item={item} action={action} />;
     };
+
+    const blurSearch = useCallback(() => {
+        searchInputRef.current?.blur();
+        Keyboard.dismiss();
+    }, []);
+
     return (  
         <SafeAreaView style={styles.container} edges={['top']}>
+            <TouchableWithoutFeedback onPress={blurSearch} accessible={false}>
+            <View style={styles.container}>
             <View style={[styles.header, { paddingHorizontal: horizontalSafePad }]}>
-                <Text style={styles.headerTitle}>TalkNow</Text>
+                <View style={styles.headerTitleWrapRow}>
+                    <SvgXml xml={CHAT_HEADER_ICON_XML} width={22} height={22} />
+                    <Text style={styles.headerTitle}>TalkNow</Text>
+                </View>
                 <Pressable
                     style={({ pressed }) => [
                         styles.notification,
@@ -770,73 +790,6 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                                 },
                             ]}
                         />
-                    </View>
-
-                    <View style={styles.modeToggle}>
-                        <Animated.View
-                            pointerEvents="none"
-                            style={[
-                                styles.modeTogglePill,
-                                {
-                                    transform: [
-                                        {
-                                            translateX: modeAnim.interpolate({
-                                                inputRange: [0, 1],
-                                                outputRange: [0, MODE_TOGGLE_PILL_WIDTH],
-                                            }),
-                                        },
-                                    ],
-                                },
-                            ]}
-                        />
-
-                        <Pressable
-                            onPress={() => {
-                                setSearchMode('local');
-                                setShowingGlobal(false);
-                                setGlobalResults([]);
-                                setGlobalError(null);
-                                searchInputRef.current?.focus();
-                            }}
-                            style={styles.modeToggleButton}
-                            accessibilityRole="button"
-                            accessibilityLabel="Search chats"
-                        >
-                            <Animated.Text
-                                style={[
-                                    styles.modeToggleText,
-                                    {
-                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.7] }),
-                                    },
-                                ]}
-                            >
-                                Chats
-                            </Animated.Text>
-                        </Pressable>
-
-                        <Pressable
-                            onPress={() => {
-                                setSearchMode('global');
-                                setGlobalError(null);
-                                setShowingGlobal(true);
-                                void runGlobalSearch(query);
-                                searchInputRef.current?.focus();
-                            }}
-                            style={styles.modeToggleButton}
-                            accessibilityRole="button"
-                            accessibilityLabel="Search users"
-                        >
-                            <Animated.Text
-                                style={[
-                                    styles.modeToggleText,
-                                    {
-                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
-                                    },
-                                ]}
-                            >
-                                Users
-                            </Animated.Text>
-                        </Pressable>
                     </View>
 
                     <TextInput
@@ -933,6 +886,75 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                         </Animated.View>
                     </Pressable>
                 </Animated.View>
+
+                <View style={styles.modeToggleRow}>
+                    <View style={styles.modeToggle}>
+                        <Animated.View
+                            pointerEvents="none"
+                            style={[
+                                styles.modeTogglePill,
+                                {
+                                    transform: [
+                                        {
+                                            translateX: modeAnim.interpolate({
+                                                inputRange: [0, 1],
+                                                outputRange: [0, MODE_TOGGLE_PILL_WIDTH],
+                                            }),
+                                        },
+                                    ],
+                                },
+                            ]}
+                        />
+
+                        <Pressable
+                            onPress={() => {
+                                setSearchMode('local');
+                                setShowingGlobal(false);
+                                setGlobalResults([]);
+                                setGlobalError(null);
+                                searchInputRef.current?.focus();
+                            }}
+                            style={styles.modeToggleButton}
+                            accessibilityRole="button"
+                            accessibilityLabel="Search chats"
+                        >
+                            <Animated.Text
+                                style={[
+                                    styles.modeToggleText,
+                                    {
+                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.7] }),
+                                    },
+                                ]}
+                            >
+                                Chats
+                            </Animated.Text>
+                        </Pressable>
+
+                        <Pressable
+                            onPress={() => {
+                                setSearchMode('global');
+                                setGlobalError(null);
+                                setShowingGlobal(true);
+                                void runGlobalSearch(query);
+                                searchInputRef.current?.focus();
+                            }}
+                            style={styles.modeToggleButton}
+                            accessibilityRole="button"
+                            accessibilityLabel="Search users"
+                        >
+                            <Animated.Text
+                                style={[
+                                    styles.modeToggleText,
+                                    {
+                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
+                                    },
+                                ]}
+                            >
+                                Users
+                            </Animated.Text>
+                        </Pressable>
+                    </View>
+                </View>
             </View>
 
             {showingGlobal && globalError ? (
@@ -971,6 +993,8 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     showsVerticalScrollIndicator={false}
                 />
             )}
+            </View>
+            </TouchableWithoutFeedback>
         </SafeAreaView>
     );
 };
@@ -996,7 +1020,11 @@ const styles = StyleSheet.create({
         color: '#710b8d',
         fontSize: 26,
         fontWeight: '600',
-        marginLeft: 4,
+        marginLeft: 8,
+    },
+    headerTitleWrapRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
     rowPressed: {
         backgroundColor: 'rgba(233,226,255,0.42)',
@@ -1018,11 +1046,11 @@ const styles = StyleSheet.create({
         maxWidth: 420,
         minHeight: 44,
         borderWidth: 1,
-        borderColor: '#350d81',
+        borderColor: '#9d7bdd',
         borderRadius: 30,
         paddingLeft: 10,
         paddingRight: 6,
-        backgroundColor: '#fff',
+        backgroundColor: '#e1ade6fff',
         flexDirection: 'row',
         alignItems: 'center',
         overflow: 'hidden',
@@ -1039,7 +1067,13 @@ const styles = StyleSheet.create({
         ...StyleSheet.absoluteFillObject,
         borderRadius: 30,
         borderWidth: 2,
-        borderColor: '#6733d0',
+        borderColor: '#b29fd6',
+    },
+    modeToggleRow: {
+        width: '100%',
+        maxWidth: 420,
+        marginTop: 8,
+        alignItems: 'flex-start',
     },
     modeToggle: {
         height: 32,
@@ -1049,7 +1083,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 10,
         padding: MODE_TOGGLE_PADDING,
         position: 'relative',
     },
@@ -1075,7 +1108,7 @@ const styles = StyleSheet.create({
     modeToggleText: {
         fontSize: 12,
         fontWeight: '700',
-        color: '#350d81',
+        color: '#000000',
         textAlign: 'center',
         includeFontPadding: false,
     },
@@ -1164,6 +1197,7 @@ const styles = StyleSheet.create({
     rowContent: {
         flex: 1,
         minWidth: 0,
+        paddingVertical: 4,
     },
     followButton: {
         minWidth: 104,
@@ -1257,7 +1291,6 @@ const styles = StyleSheet.create({
         width: 36,
         height: 36,
         borderRadius: 18,
-        backgroundColor: 'rgba(103,51,208,0.12)',
         alignItems: 'center',
         justifyContent: 'center',
     }

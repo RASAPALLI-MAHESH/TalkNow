@@ -300,6 +300,7 @@ export type ConversationMessageDto = {
     id: string;
     text: string;
     sender: 'me' | 'other';
+    status?: 'sending' | 'sent' | 'delivered' | 'read';
     from?: string;
     to?: string;
     createdAt: string;

@@ -57,7 +57,7 @@ const AvatarPicker = ({
                 {hasImage ? (
                     <ExpoImage
                         source={{ uri: safeUri }}
-                        style={[{ width: size, height: size, borderRadius: size / 2 },]}
+                        style={[{ width: size, height: size, borderRadius: size / 2 }, style]}
                         contentFit="cover"
                         transition={120}
                         cachePolicy="memory-disk"
@@ -67,6 +67,7 @@ const AvatarPicker = ({
                         style={[
                             styles.fallback,
                             { width: size, height: size, borderRadius: size / 2 },
+                            style,
                             fallbackStyle,
                         ]}
                     >

@@ -206,6 +206,10 @@ const getConversationMessages = async (req, res) => {
                 id: String(m._id),
                 text: String(m.content ?? ''),
                 sender: String(m.senderId) === userId ? 'me' : 'other',
+                status:
+                    String(m.senderId) === userId
+                        ? (m.readAt ? 'read' : (m.deliveredAt ? 'delivered' : 'sent'))
+                        : undefined,
                 from: String(m.senderId),
                 to: String(m.receiverId),
                 createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : new Date().toISOString(),

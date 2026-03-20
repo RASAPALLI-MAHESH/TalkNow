@@ -31,14 +31,12 @@ import {
     FlatList,
     Keyboard,
     KeyboardAvoidingView,
-    KeyboardEvent,
     LayoutAnimation,
     Platform,
     Pressable,
     StatusBar,
     Text,
     TextInput,
-    TouchableWithoutFeedback,
     UIManager,
     View,
 } from 'react-native';
@@ -60,6 +58,14 @@ export type ChatMessage = {
     status?: 'sending' | 'sent' | 'delivered' | 'read';
 };
 
+type ConversationCacheItem = {
+    messages: ChatMessage[];
+    fetchedAt: number;
+};
+
+const CONVERSATION_CACHE_TTL_MS = 2 * 60 * 1000;
+const conversationCache = new Map<string, ConversationCacheItem>();
+
 /* ─────────────────────── Main Screen ─────────────────────── */
 
 interface ChatroomProps {
@@ -69,7 +75,7 @@ interface ChatroomProps {
 
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
-    const { lastMessage, sendMessage } = useWebSocketClient();
+    const { lastMessage, sendMessage, markRead } = useWebSocketClient();
     const insets = useSafeAreaInsets();
 
     const peerId = String(route?.params?.peerId ?? '').trim();
@@ -93,43 +99,35 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const [loadingMore, setLoadingMore] = useState(false);
     const [oldestMessageDate, setOldestMessageDate] = useState<string | null>(null);
     const [hasMoreMessages, setHasMoreMessages] = useState(true);
-    const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-    useEffect(() => {
-        const onKeyboardShow = (event: KeyboardEvent) => {
-            const rawHeight = Number(event?.endCoordinates?.height ?? 0);
-            const nextHeight = Math.max(rawHeight - Math.max(insets.bottom, 0), 0);
-            setKeyboardHeight(nextHeight);
-        };
-
-        const onKeyboardHide = () => {
-            setKeyboardHeight(0);
-        };
-
-        const showSub = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-            onKeyboardShow
-        );
-        const hideSub = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-            onKeyboardHide
-        );
-
-        return () => {
-            showSub.remove();
-            hideSub.remove();
-        };
-    }, [insets.bottom]);
+    const writeConversationCache = useCallback((id: string, nextMessages: ChatMessage[]) => {
+        if (!id) return;
+        conversationCache.set(id, {
+            messages: nextMessages,
+            fetchedAt: Date.now(),
+        });
+    }, []);
 
     useEffect(() => {
         let mounted = true;
+        shouldAutoScroll.current = true;
 
         const hydrateConversation = async () => {
             if (!peerId) return;
             try {
-                setMessages([]);
-                setOldestMessageDate(null);
-                setHasMoreMessages(true);
+                // Instant open: hydrate from recent in-memory cache first.
+                const cached = conversationCache.get(peerId);
+                const cacheIsFresh =
+                    !!cached && Date.now() - cached.fetchedAt <= CONVERSATION_CACHE_TTL_MS;
+
+                if (cacheIsFresh && cached.messages.length > 0) {
+                    setMessages(cached.messages);
+                    setOldestMessageDate(cached.messages[0]?.createdAt ?? null);
+                    setHasMoreMessages(cached.messages.length >= 50);
+                } else {
+                    setOldestMessageDate(null);
+                    setHasMoreMessages(true);
+                }
                 
                 const res = await getConversationMessages(peerId, undefined);
                 if (!mounted) return;
@@ -140,9 +138,14 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                     text: String(m?.text ?? ''),
                     sender: m?.sender === 'me' ? 'me' : 'other',
                     createdAt: String(m?.createdAt ?? new Date().toISOString()),
+                    status:
+                        m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent' || m?.status === 'sending'
+                            ? m.status
+                            : undefined,
                 }));
                 
                 setMessages(normalized);
+                writeConversationCache(peerId, normalized);
                 
                 // Track oldest message for pagination
                 if (normalized.length > 0) {
@@ -161,38 +164,112 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         return () => {
             mounted = false;
         };
-    }, [peerId]);
+    }, [peerId, writeConversationCache]);
 
     useEffect(() => {
         const type = String((lastMessage as any)?.type ?? '');
-        if (type !== 'new_message' && type !== 'sent') return;
+        if (!type) return;
 
         const from = String((lastMessage as any)?.from ?? '').trim();
         const to = String((lastMessage as any)?.to ?? '').trim();
         const content = String((lastMessage as any)?.content ?? '').trim();
         const id = String((lastMessage as any)?.id ?? `${Date.now()}_${from}_${to}`);
+        const clientId = String((lastMessage as any)?.clientId ?? '').trim();
         const date = String((lastMessage as any)?.date ?? new Date().toISOString());
         const currentUserId = String(user?.id ?? '').trim();
 
-        if (!content || !peerId || !currentUserId) return;
+        if (!peerId || !currentUserId) return;
+
+        if (type === 'message_status') {
+            const status = String((lastMessage as any)?.status ?? '').trim();
+            if (status !== 'sent' && status !== 'delivered' && status !== 'read') return;
+
+            setMessages((prev) => {
+                let changed = false;
+                const next = prev.map((m) => {
+                    const idMatch = m.id === id;
+                    const clientMatch = clientId && m.id === clientId;
+                    if (!idMatch && !clientMatch) return m;
+                    changed = true;
+                    return {
+                        ...m,
+                        id: id || m.id,
+                        status: status as ChatMessage['status'],
+                    };
+                });
+                if (!changed) return prev;
+                writeConversationCache(peerId, next);
+                return next;
+            });
+            return;
+        }
+
+        if (type === 'messages_read') {
+            const idsRaw = Array.isArray((lastMessage as any)?.ids) ? (lastMessage as any).ids : [];
+            const ids = new Set(idsRaw.map((x: any) => String(x)));
+            if (ids.size === 0) return;
+
+            setMessages((prev) => {
+                let changed = false;
+                const next = prev.map((m) => {
+                    if (!ids.has(m.id)) return m;
+                    changed = true;
+                    return { ...m, status: 'read' as const };
+                });
+                if (!changed) return prev;
+                writeConversationCache(peerId, next);
+                return next;
+            });
+            return;
+        }
+
+        if (type !== 'new_message' && type !== 'sent') return;
+        if (!content) return;
+
         const belongsToOpenConversation =
             (from === currentUserId && to === peerId) ||
             (from === peerId && to === currentUserId);
         if (!belongsToOpenConversation) return;
 
         setMessages((prev) => {
+            // If this is an ack for an optimistic message, upgrade it in place.
+            if (type === 'sent' && clientId) {
+                let changed = false;
+                const upgraded = prev.map((m) => {
+                    if (m.id !== clientId) return m;
+                    changed = true;
+                    return { ...m, id, createdAt: date, status: 'sent' as const };
+                });
+                if (changed) {
+                    writeConversationCache(peerId, upgraded);
+                    return upgraded;
+                }
+            }
+
             if (prev.some((m) => m.id === id)) return prev;
-            return [
-                ...prev,
-                {
-                    id,
-                    text: content,
-                    sender: from === currentUserId ? 'me' : 'other',
-                    createdAt: date,
-                },
-            ];
+            const appended: ChatMessage = {
+                id,
+                text: content,
+                sender: from === currentUserId ? 'me' : 'other',
+                createdAt: date,
+                status: from === currentUserId ? 'sent' : undefined,
+            };
+            const next = [...prev, appended];
+            writeConversationCache(peerId, next);
+            return next;
         });
-    }, [lastMessage, peerId, user?.id]);
+
+        if (type === 'new_message' && from === peerId && to === currentUserId) {
+            markRead(peerId, date);
+        }
+    }, [lastMessage, markRead, peerId, user?.id, writeConversationCache]);
+
+    useEffect(() => {
+        if (!peerId || messages.length === 0) return;
+        const latest = messages[messages.length - 1];
+        if (!latest || latest.sender !== 'other') return;
+        markRead(peerId, latest.createdAt);
+    }, [markRead, messages, peerId]);
 
     const initials = useMemo(() => {
         const name = String(user?.username ?? '').trim();
@@ -266,7 +343,11 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 createdAt: String(m?.createdAt ?? new Date().toISOString()),
             }));
             
-            setMessages((prev) => [...normalized, ...prev]);
+            setMessages((prev) => {
+                const next = [...normalized, ...prev];
+                writeConversationCache(peerId, next);
+                return next;
+            });
             
             if (normalized.length > 0) {
                 setOldestMessageDate(normalized[0].createdAt);
@@ -293,6 +374,20 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         if (!canSend || !peerId) return;
         const text = draft.trim();
         setDraft('');
+        const clientId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        setMessages((prev) => {
+            const optimistic: ChatMessage = {
+                id: clientId,
+                text,
+                sender: 'me',
+                createdAt: new Date().toISOString(),
+                status: 'sending',
+            };
+            const next = [...prev, optimistic];
+            writeConversationCache(peerId, next);
+            return next;
+        });
 
         /* Trigger LayoutAnimation on Android so the composer height change is smooth */
         if (Platform.OS === 'android') {
@@ -302,11 +397,18 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         /* Quick send confirm */
         // Send immediately, no animation needed
 
-        const ok = sendMessage(peerId, text);
+        const ok = sendMessage(peerId, text, clientId);
         if (!ok) {
             setDraft(text);
+            setMessages((prev) => {
+                const next = prev.map((m) =>
+                    m.id === clientId ? { ...m, status: 'sending' as const } : m
+                );
+                writeConversationCache(peerId, next);
+                return next;
+            });
         }
-    }, [canSend, draft, peerId, sendMessage]);
+    }, [canSend, draft, peerId, sendMessage, writeConversationCache]);
 
     const renderItem = useCallback(
         ({ item }: { item: ChatMessage }) => (
@@ -393,7 +495,6 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
             style={[
                 styles.composerContainer,
                 { paddingBottom: Math.max(insets.bottom, 4) },
-                Platform.OS === 'android' && { marginBottom: keyboardHeight },
             ]}
         >
             <View style={styles.composerOuter}>
@@ -443,33 +544,31 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     );
 
     const MainContent = (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <View style={styles.container}>
-                {Header}
+        <View style={styles.container}>
+            {Header}
 
-                <FlatList
-                    ref={listRef}
-                    data={messages}
-                    keyExtractor={keyExtractor}
-                    renderItem={renderItem}
-                    contentContainerStyle={styles.messagesContent}
-                    keyboardShouldPersistTaps="handled"
-                    keyboardDismissMode="on-drag"
-                    scrollEnabled={true}
-                    nestedScrollEnabled={true}
-                    showsVerticalScrollIndicator={false}
-                    removeClippedSubviews={Platform.OS === 'android'}
-                    initialNumToRender={20}
-                    maxToRenderPerBatch={10}
-                    windowSize={15}
-                    updateCellsBatchingPeriod={30}
-                    onStartReached={handleLoadMore}
-                    onStartReachedThreshold={0.5}
-                />
+            <FlatList
+                ref={listRef}
+                data={messages}
+                keyExtractor={keyExtractor}
+                renderItem={renderItem}
+                contentContainerStyle={styles.messagesContent}
+                keyboardShouldPersistTaps="always"
+                keyboardDismissMode="none"
+                scrollEnabled={true}
+                nestedScrollEnabled={true}
+                showsVerticalScrollIndicator={false}
+                removeClippedSubviews={Platform.OS === 'android'}
+                initialNumToRender={20}
+                maxToRenderPerBatch={10}
+                windowSize={15}
+                updateCellsBatchingPeriod={30}
+                onStartReached={handleLoadMore}
+                onStartReachedThreshold={0.5}
+            />
 
-                {Composer}
-            </View>
-        </TouchableWithoutFeedback>
+            {Composer}
+        </View>
     );
 
     /* ── Render ── */

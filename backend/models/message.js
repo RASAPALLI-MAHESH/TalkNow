@@ -37,6 +37,10 @@ const messageSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        deliveredAt: {
+            type: Date,
+            default: null,
+        },
     },
     { timestamps: true }
 );

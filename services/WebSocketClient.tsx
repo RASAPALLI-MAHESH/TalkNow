@@ -72,7 +72,7 @@ export const useWebSocketClient = () => {
         };
     }, [user?.id, wsUrl]);
 
-    const sendMessage = (to: string, content: string) => {
+    const sendMessage = (to: string, content: string, clientId?: string) => {
         const from = user?.id;
         const socket = wsRef.current;
         if (!from || !socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -82,10 +82,24 @@ export const useWebSocketClient = () => {
             to,
             from,
             content,
+            clientId,
             date: new Date().toISOString(),
         }));
         return true;
     };
 
-    return { connected, lastMessage, sendMessage, wsUrl };
+    const markRead = (peerId: string, upTo?: string) => {
+        const from = user?.id;
+        const socket = wsRef.current;
+        if (!from || !socket || socket.readyState !== WebSocket.OPEN) return false;
+
+        socket.send(JSON.stringify({
+            type: 'mark_read',
+            peerId,
+            upTo,
+        }));
+        return true;
+    };
+
+    return { connected, lastMessage, sendMessage, markRead, wsUrl };
 };

@@ -152,7 +152,7 @@ export const styles = StyleSheet.create({
         borderRadius: 20,
         ...Platform.select({
             ios: {
-                shadowColor: BUBBLE_SHADOW,
+                 shadowColor: BUBBLE_SHADOW,
                 shadowOffset: { width: 0, height: 2 },
                 shadowOpacity: 1,
                 shadowRadius: 4,
@@ -170,7 +170,7 @@ export const styles = StyleSheet.create({
 
     bubbleOther: {
         backgroundColor: WHITE,
-        borderWidth: StyleSheet.hairlineWidth,
+    
         borderColor: PURPLE_LIGHT,
         borderBottomLeftRadius: 4,
     },
@@ -199,9 +199,8 @@ export const styles = StyleSheet.create({
     /* ── Composer ── */
 
     composerContainer: {
-        borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: SEPARATOR,
-        backgroundColor: WHITE,
+        backgroundColor: PURPLE_XLIGHT,
         marginBottom: 0,
     },
 
