@@ -1,5 +1,6 @@
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import AvatarPicker from './AvatarPicker';
 
 type FollowRequestComponentProps = {
     username: string;
@@ -22,13 +23,15 @@ const FollowRequestComponent = ({
         <View style={styles.wrap}>
             <View style={styles.card}>
                 <View style={styles.topRow}>
-                    {typeof profilePicture === 'string' && profilePicture.trim().length > 0 ? (
-                        <Image source={{ uri: profilePicture.trim() }} style={styles.avatarImage} />
-                    ) : (
-                        <View style={styles.avatar}>
-                            <Text style={styles.avatarText}>{initial}</Text>
-                        </View>
-                    )}
+                    <AvatarPicker
+                        uri={profilePicture}
+                        name={username}
+                        size={46}
+                        style={styles.avatarImage}
+                        fallbackStyle={styles.avatar}
+                        textStyle={styles.avatarText}
+                        previewEnabled
+                    />
 
                     <View style={styles.content}>
                         <Text style={styles.username} numberOfLines={1}>

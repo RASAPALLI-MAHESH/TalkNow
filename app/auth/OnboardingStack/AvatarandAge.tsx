@@ -1,3 +1,4 @@
+import AvatarPicker from '@/app/components/AvatarPicker';
 import { checkUsernameAvailability, getAuthErrorMessage } from '@/services/AuthService';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -5,7 +6,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
     Alert,
-    Image,
     Keyboard,
     KeyboardAvoidingView,
     Platform,
@@ -150,7 +150,13 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 								accessibilityLabel="Choose profile photo"
 							>
 								{avatarUri ? (
-									<Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+									<AvatarPicker
+										uri={avatarUri}
+										name={trimmedUsername || Firstname || 'User'}
+										size={120}
+										style={styles.avatarImage}
+										previewEnabled
+									/>
 								) : (
 									<View style={styles.avatarPlaceholder}>
 										<Ionicons name="person" size={56} color="#a0a7b4" />

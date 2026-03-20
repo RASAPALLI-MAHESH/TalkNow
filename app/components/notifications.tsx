@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { io } from 'socket.io-client';
 import useAuth from '../../hooks/useAuth';
@@ -15,6 +15,7 @@ import {
     type MutualConnectionDto,
     type NotificationDto,
 } from '../../services/AuthService';
+import AvatarPicker from './AvatarPicker';
 import FollowRequestComponent from './followRequestComponent';
 import FollowRequestNotification from './followrequestNotification';
 const HEADER_HEIGHT = 56;
@@ -556,15 +557,15 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                             renderItem={({ item }) => (
                                 <View style={styles.collectionRowWrap}>
                                     <Pressable style={({ pressed }) => [styles.collectionRow, pressed && styles.collectionRowPressed]}>
-                                        {typeof item.profilePicture === 'string' && item.profilePicture.trim().length > 0 ? (
-                                            <Image source={{ uri: item.profilePicture.trim() }} style={styles.collectionAvatarImage} />
-                                        ) : (
-                                            <View style={styles.collectionAvatar}>
-                                                <Text style={styles.collectionAvatarText}>
-                                                    {String(item.username || '?').slice(0, 1).toUpperCase()}
-                                                </Text>
-                                            </View>
-                                        )}
+                                        <AvatarPicker
+                                            uri={item.profilePicture}
+                                            name={item.username}
+                                            size={44}
+                                            style={styles.collectionAvatarImage}
+                                            fallbackStyle={styles.collectionAvatar}
+                                            textStyle={styles.collectionAvatarText}
+                                            previewEnabled
+                                        />
 
                                         <View style={styles.collectionRowContent}>
                                             <Text style={styles.collectionName} numberOfLines={1}>

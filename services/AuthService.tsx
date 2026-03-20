@@ -287,10 +287,56 @@ export type MutualConnectionDto = {
     message?: string;
 };
 
+export type ChatInboxDto = {
+    id: string;
+    username: string;
+    profilePicture?: string;
+    lastMessage: string;
+    date?: string;
+    conversationKey?: string;
+};
+
+export type ConversationMessageDto = {
+    id: string;
+    text: string;
+    sender: 'me' | 'other';
+    from?: string;
+    to?: string;
+    createdAt: string;
+};
+
 export const getMutualConnections = async (q?: string): Promise<{ connections: MutualConnectionDto[] }> => {
     const response = await client.get('/connections/mutual', {
         params: q && q.trim().length > 0 ? { q: q.trim() } : undefined,
     });
+    return response.data;
+};
+
+export const getConnectionCounters = async (): Promise<{ counters: { mutual: number; pending: number; chatActive: number } }> => {
+    const response = await client.get('/connections/counters');
+    return response.data;
+};
+
+export const getChatInbox = async (): Promise<{ chats: ChatInboxDto[] }> => {
+    const response = await client.get('/chats/inbox');
+    return response.data;
+};
+
+export const getConversationMessages = async (
+    peerId: string,
+    before?: string
+): Promise<{ messages: ConversationMessageDto[] }> => {
+    const response = await client.get(`/messages/with/${encodeURIComponent(peerId)}`, {
+        params: before ? { before } : undefined,
+    });
+    return response.data;
+};
+
+export const sendMessageToUser = async (
+    toUserId: string,
+    content: string
+): Promise<{ message: unknown }> => {
+    const response = await client.post('/messages/send', { toUserId, content });
     return response.data;
 };
 
@@ -334,6 +380,10 @@ const AuthService = {
     acceptFollowRequest,
     rejectFollowRequest,
     getMutualConnections,
+    getConnectionCounters,
+    getChatInbox,
+    getConversationMessages,
+    sendMessageToUser,
     getNotifications,
     getUnreadNotificationCount,
     deleteNotification,

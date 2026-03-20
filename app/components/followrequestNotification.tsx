@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import AvatarPicker from './AvatarPicker';
 
 type FollowRequestNotificationProps = {
     username: string;
@@ -28,13 +29,15 @@ const FollowRequestNotification = ({
                 accessibilityRole={onPress ? 'button' : undefined}
                 accessibilityLabel={onPress ? `Notification from ${username}` : undefined}
             >
-            {typeof profilePicture === 'string' && profilePicture.trim().length > 0 ? (
-                <Image source={{ uri: profilePicture.trim() }} style={styles.avatarImage} />
-            ) : (
-                <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{initial}</Text>
-                </View>
-            )}
+            <AvatarPicker
+                uri={profilePicture}
+                name={username}
+                size={48}
+                style={styles.avatarImage}
+                fallbackStyle={styles.avatar}
+                textStyle={styles.avatarText}
+                previewEnabled
+            />
 
             <View style={styles.content}>
                 <Text style={styles.username} numberOfLines={1}>

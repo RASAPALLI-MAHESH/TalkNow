@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../models/user');
 const Notification = require('../models/notification');
+const Connection = require('../models/connection');
 const { getIo, getUserRoom } = require('../services/notificationSocket');
 
 // These handlers are meant to be mounted from backend/routes/authRoutes.js
@@ -88,6 +89,14 @@ const parsePositiveInt = (raw, fallback, min, max) => {
     return Math.min(Math.max(n, min), max);
 };
 
+const normalizePair = (leftId, rightId) => {
+    const ids = [String(leftId || '').trim(), String(rightId || '').trim()].sort();
+    return {
+        pairKey: `${ids[0]}:${ids[1]}`,
+        participants: [new mongoose.Types.ObjectId(ids[0]), new mongoose.Types.ObjectId(ids[1])],
+    };
+};
+
 const followUser = async (req, res) => {
     try {
         const userId = getActorUserId(req);
@@ -98,6 +107,22 @@ const followUser = async (req, res) => {
 
         const target = await User.findById(targetUserId).select('_id');
         if (!target) return res.status(404).json({ message: 'Target user not found' });
+
+        const pair = normalizePair(userId, targetUserId);
+        const existingConnection = await Connection.findOne({ pairKey: pair.pairKey })
+            .select('status requestedBy')
+            .lean();
+
+        if (existingConnection?.status === 'accepted') {
+            return res.status(200).json({ message: 'Already connected' });
+        }
+
+        if (
+            existingConnection?.status === 'pending' &&
+            String(existingConnection?.requestedBy || '') === String(userId)
+        ) {
+            return res.status(200).json({ message: 'Follow request already sent' });
+        }
 
         // Follow flow is request-based. Persist/emit only a follow_request notification.
         const existingPending = await Notification.findOne({
@@ -120,6 +145,28 @@ const followUser = async (req, res) => {
 
         let doc;
         try {
+            await Connection.updateOne(
+                { pairKey: pair.pairKey },
+                {
+                    $set: {
+                        pairKey: pair.pairKey,
+                        participants: pair.participants,
+                        requestedBy: new mongoose.Types.ObjectId(userId),
+                        requestedTo: new mongoose.Types.ObjectId(targetUserId),
+                        status: 'pending',
+                        requestedAt: new Date(),
+                        respondedAt: null,
+                        acceptedAt: null,
+                    },
+                    $setOnInsert: {
+                        hasMessages: false,
+                        lastMessageAt: null,
+                        lastMessagePreview: '',
+                    },
+                },
+                { upsert: true }
+            );
+
             doc = await Notification.create({
                 toUserId: targetUserId,
                 fromUserId: userId,
@@ -182,12 +229,17 @@ const unfollowUser = async (req, res) => {
         const session = await mongoose.startSession();
         let actor;
         let doc;
+        const message = 'removed connection';
+
         try {
             await session.withTransaction(async () => {
                 await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } }, { session });
                 await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } }, { session });
                 await User.findByIdAndUpdate(userId, { $pull: { followers: targetUserId } }, { session });
                 await User.findByIdAndUpdate(targetUserId, { $pull: { following: userId } }, { session });
+
+                const pair = normalizePair(userId, targetUserId);
+                await Connection.deleteOne({ pairKey: pair.pairKey }).session(session);
 
                 await Notification.deleteMany(
                     {
@@ -200,7 +252,6 @@ const unfollowUser = async (req, res) => {
                 );
 
                 actor = await User.findById(userId).select('_id username profilePicture').session(session).lean();
-                const message = 'removed connection';
                 const created = await Notification.create(
                     [
                         {
@@ -342,6 +393,28 @@ const acceptFollowRequest = async (req, res) => {
                     { session }
                 );
 
+                const pair = normalizePair(userId, requesterUserId);
+                await Connection.updateOne(
+                    { pairKey: pair.pairKey },
+                    {
+                        $set: {
+                            pairKey: pair.pairKey,
+                            participants: pair.participants,
+                            requestedBy: new mongoose.Types.ObjectId(requesterUserId),
+                            requestedTo: new mongoose.Types.ObjectId(userId),
+                            status: 'accepted',
+                            respondedAt: new Date(),
+                            acceptedAt: new Date(),
+                        },
+                        $setOnInsert: {
+                            hasMessages: false,
+                            lastMessageAt: null,
+                            lastMessagePreview: '',
+                        },
+                    },
+                    { upsert: true, session }
+                );
+
                 const created = await Notification.create(
                     [
                         {
@@ -441,6 +514,21 @@ const rejectFollowRequest = async (req, res) => {
 
                         throw Object.assign(new Error('Follow request not found'), { statusCode: 404 });
                     }
+
+                    if (requesterUserIdFromBody && mongoose.Types.ObjectId.isValid(requesterUserIdFromBody)) {
+                        const pair = normalizePair(userId, requesterUserIdFromBody);
+                        await Connection.updateOne(
+                            { pairKey: pair.pairKey },
+                            {
+                                $set: {
+                                    status: 'rejected',
+                                    respondedAt: new Date(),
+                                },
+                            },
+                            { session }
+                        );
+                    }
+
                     return;
                 }
 
@@ -453,6 +541,18 @@ const rejectFollowRequest = async (req, res) => {
                         toUserId: userId,
                         fromUserId: requesterUserIdFromBody,
                         type: 'follow_request',
+                    },
+                    { session }
+                );
+
+                const pair = normalizePair(userId, requesterUserIdFromBody);
+                await Connection.updateOne(
+                    { pairKey: pair.pairKey },
+                    {
+                        $set: {
+                            status: 'rejected',
+                            respondedAt: new Date(),
+                        },
                     },
                     { session }
                 );
@@ -489,31 +589,46 @@ const getMutualConnections = async (req, res) => {
         const offset = parsePositiveInt(req.query?.offset, 0, 0, 1000000);
         const escapedQuery = q ? escapeRegex(q) : '';
 
-        const pipeline = [
-            { $match: { _id: new mongoose.Types.ObjectId(String(userId)) } },
-            { $project: { mutualIds: { $setIntersection: ['$following', '$followers'] } } },
+        const me = new mongoose.Types.ObjectId(String(userId));
+
+        const rawConnections = await Connection.aggregate([
+            {
+                $match: {
+                    participants: me,
+                    status: 'accepted',
+                },
+            },
+            {
+                $project: {
+                    peerIds: {
+                        $filter: {
+                            input: '$participants',
+                            as: 'id',
+                            cond: { $ne: ['$$id', me] },
+                        },
+                    },
+                },
+            },
             {
                 $lookup: {
                     from: 'users',
-                    let: { mutualIds: '$mutualIds' },
+                    localField: 'peerIds',
+                    foreignField: '_id',
+                    as: 'peerDocs',
                     pipeline: [
-                        { $match: { $expr: { $in: ['$_id', '$$mutualIds'] } } },
                         { $project: { _id: 1, username: 1, profilePicture: 1 } },
                         ...(escapedQuery
                             ? [{ $match: { username: { $regex: escapedQuery, $options: 'i' } } }]
                             : []),
-                        { $sort: { username: 1 } },
-                        { $skip: offset },
-                        { $limit: limit },
                     ],
-                    as: 'connections',
                 },
             },
-            { $project: { _id: 0, connections: 1 } },
-        ];
-
-        const result = await User.aggregate(pipeline);
-        const rawConnections = Array.isArray(result?.[0]?.connections) ? result[0].connections : [];
+            { $unwind: '$peerDocs' },
+            { $replaceRoot: { newRoot: '$peerDocs' } },
+            { $sort: { username: 1 } },
+            { $skip: offset },
+            { $limit: limit },
+        ]);
 
         const connections = rawConnections.map((u) => ({
             id: String(u._id),

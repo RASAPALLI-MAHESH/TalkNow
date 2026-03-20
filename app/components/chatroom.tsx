@@ -13,7 +13,10 @@
  *  - Memoised renderItem so FlatList never re-renders unchanged bubbles
  */
 
+import AvatarPicker from '@/app/components/AvatarPicker';
 import useAuth from '@/hooks/useAuth';
+import { getConversationMessages } from '@/services/AuthService';
+import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import React, {
     memo,
@@ -26,7 +29,6 @@ import React, {
 import {
     Animated,
     FlatList,
-    Image,
     Keyboard,
     KeyboardAvoidingView,
     LayoutAnimation,
@@ -115,10 +117,20 @@ const AnimatedBubble = memo(({ item }: BubbleProps) => {
 
 interface ChatroomProps {
     navigation: any;
+    route: any;
 }
 
-const Chatroom = ({ navigation }: ChatroomProps) => {
+const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
+    const { lastMessage, sendMessage } = useWebSocketClient();
+
+    const peerId = String(route?.params?.peerId ?? '').trim();
+    const peerUsername = String(route?.params?.peerUsername ?? 'Chat').trim() || 'Chat';
+    const peerAvatar =
+        typeof route?.params?.peerAvatar === 'string' && route.params.peerAvatar.trim().length > 0
+            ? route.params.peerAvatar.trim()
+            : '';
+
     const [draft, setDraft] = useState('');
     const [isFocused, setIsFocused] = useState(false);
     const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -130,10 +142,66 @@ const Chatroom = ({ navigation }: ChatroomProps) => {
     /* Input border animation */
     const borderAnim = useRef(new Animated.Value(0)).current;
 
-    const [messages, setMessages] = useState<ChatMessage[]>([
-        { id: '1', text: 'Hi 👋', sender: 'other', createdAt: new Date().toISOString() },
-        { id: '2', text: 'Hello! How can I help?', sender: 'me', createdAt: new Date().toISOString() },
-    ]);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+    useEffect(() => {
+        let mounted = true;
+
+        const hydrateConversation = async () => {
+            if (!peerId) return;
+            try {
+                const res = await getConversationMessages(peerId);
+                if (!mounted) return;
+
+                const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
+                const normalized: ChatMessage[] = incoming.map((m: any) => ({
+                    id: String(m?.id ?? Date.now()),
+                    text: String(m?.text ?? ''),
+                    sender: m?.sender === 'me' ? 'me' : 'other',
+                    createdAt: String(m?.createdAt ?? new Date().toISOString()),
+                }));
+                setMessages(normalized);
+            } catch (err: any) {
+                console.log('conversation hydrate error:', err?.message ?? String(err));
+            }
+        };
+
+        void hydrateConversation();
+        return () => {
+            mounted = false;
+        };
+    }, [peerId]);
+
+    useEffect(() => {
+        const type = String((lastMessage as any)?.type ?? '');
+        if (type !== 'new_message' && type !== 'sent') return;
+
+        const from = String((lastMessage as any)?.from ?? '').trim();
+        const to = String((lastMessage as any)?.to ?? '').trim();
+        const content = String((lastMessage as any)?.content ?? '').trim();
+        const id = String((lastMessage as any)?.id ?? `${Date.now()}_${from}_${to}`);
+        const date = String((lastMessage as any)?.date ?? new Date().toISOString());
+        const currentUserId = String(user?.id ?? '').trim();
+
+        if (!content || !peerId || !currentUserId) return;
+        const belongsToOpenConversation =
+            (from === currentUserId && to === peerId) ||
+            (from === peerId && to === currentUserId);
+        if (!belongsToOpenConversation) return;
+
+        setMessages((prev) => {
+            if (prev.some((m) => m.id === id)) return prev;
+            return [
+                ...prev,
+                {
+                    id,
+                    text: content,
+                    sender: from === currentUserId ? 'me' : 'other',
+                    createdAt: date,
+                },
+            ];
+        });
+    }, [lastMessage, peerId, user?.id]);
 
     const initials = useMemo(() => {
         const name = String(user?.username ?? '').trim();
@@ -189,7 +257,7 @@ const Chatroom = ({ navigation }: ChatroomProps) => {
     }, [navigation]);
 
     const handleSend = useCallback(() => {
-        if (!canSend) return;
+        if (!canSend || !peerId) return;
         const text = draft.trim();
         setDraft('');
 
@@ -204,16 +272,11 @@ const Chatroom = ({ navigation }: ChatroomProps) => {
             Animated.spring(sendScale, { toValue: 1, useNativeDriver: true, speed: 28, bounciness: 12 }),
         ]).start();
 
-        setMessages((prev) => [
-            ...prev,
-            {
-                id: String(Date.now()),
-                text,
-                sender: 'me',
-                createdAt: new Date().toISOString(),
-            },
-        ]);
-    }, [canSend, draft]);
+        const ok = sendMessage(peerId, text);
+        if (!ok) {
+            setDraft(text);
+        }
+    }, [canSend, draft, peerId, sendMessage]);
 
     const renderItem = useCallback(
         ({ item }: { item: ChatMessage }) => <AnimatedBubble item={item} />,
@@ -244,13 +307,15 @@ const Chatroom = ({ navigation }: ChatroomProps) => {
                 accessibilityRole="button"
                 accessibilityLabel="Open profile"
             >
-                {typeof user?.profilePicture === 'string' && user.profilePicture.trim() ? (
-                    <Image source={{ uri: user.profilePicture.trim() }} style={styles.avatarImage} />
-                ) : (
-                    <View style={styles.avatarFallback}>
-                        <Text style={styles.avatarFallbackText}>{initials}</Text>
-                    </View>
-                )}
+                <AvatarPicker
+                    uri={peerAvatar}
+                    name={peerUsername}
+                    size={40}
+                    style={styles.avatarImage}
+                    fallbackStyle={styles.avatarFallback}
+                    textStyle={styles.avatarFallbackText}
+                    previewEnabled
+                />
                 {/* Online dot */}
                 <View style={styles.onlineDot} />
             </Pressable>
@@ -264,7 +329,7 @@ const Chatroom = ({ navigation }: ChatroomProps) => {
                 accessibilityLabel="Open chat details"
             >
                 <Text style={styles.headerTitle} numberOfLines={1}>
-                    {user?.username ?? 'Chat'}
+                    {peerUsername}
                 </Text>
                 <Text style={styles.headerSubtitle}>Online</Text>
             </Pressable>

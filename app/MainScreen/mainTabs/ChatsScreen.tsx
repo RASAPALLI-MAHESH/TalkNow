@@ -1,12 +1,13 @@
+import AvatarPicker from '@/app/components/AvatarPicker';
 import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
 import useAuth from '@/hooks/useAuth';
 import {
     followUser,
     getAuthErrorMessage,
-    getMutualConnections,
+    getChatInbox,
     getUnreadNotificationCount,
     unfollowUser,
-    type MutualConnectionDto,
+    type ChatInboxDto,
 } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,7 +18,6 @@ import {
     ActivityIndicator,
     Animated,
     FlatList,
-    Image,
     Platform,
     Pressable,
     StyleSheet,
@@ -270,13 +270,15 @@ const ChatRow = ({
                 />
             </View>
 
-            {typeof item.profilePicture === 'string' && item.profilePicture.trim().length > 0 ? (
-                <Image source={{ uri: item.profilePicture.trim() }} style={styles.avatarImage} />
-            ) : (
-                <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
-                </View>
-            )}
+            <AvatarPicker
+                uri={item.profilePicture}
+                name={item.name}
+                size={48}
+                style={styles.avatarImage}
+                fallbackStyle={styles.avatar}
+                textStyle={styles.avatarText}
+                previewEnabled
+            />
 
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
@@ -300,13 +302,15 @@ const GlobalChatRow = ({
     const spinnerColor = variant === 'primary' ? '#fff' : '#6733d0';
     return (
         <View style={styles.row}>
-            {typeof item.profilePicture === 'string' && item.profilePicture.trim().length > 0 ? (
-                <Image source={{ uri: item.profilePicture.trim() }} style={styles.avatarImage} />
-            ) : (
-                <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{String(item.name || '?').slice(0, 1).toUpperCase()}</Text>
-                </View>
-            )}
+            <AvatarPicker
+                uri={item.profilePicture}
+                name={item.name}
+                size={48}
+                style={styles.avatarImage}
+                fallbackStyle={styles.avatar}
+                textStyle={styles.avatarText}
+                previewEnabled
+            />
 
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
@@ -377,27 +381,27 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
     const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
 
-    const loadChatsFromConnections = useCallback(async () => {
+    const loadChatsFromInbox = useCallback(async () => {
         if (!currentUserId) {
             setChatRows([]);
             return;
         }
 
         try {
-            const res = await getMutualConnections();
-            const list = Array.isArray((res as any)?.connections) ? ((res as any).connections as MutualConnectionDto[]) : [];
+            const res = await getChatInbox();
+            const list = Array.isArray((res as any)?.chats) ? ((res as any).chats as ChatInboxDto[]) : [];
 
             const incoming: ChatListItem[] = list.map((u) => ({
                 id: String(u.id),
                 name: String(u.username ?? 'User'),
                 profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
-                lastMessage: 'Connected',
-                Date: '',
+                lastMessage: typeof u.lastMessage === 'string' && u.lastMessage.trim() ? u.lastMessage : 'New message',
+                Date: typeof u.date === 'string' ? u.date : '',
             }));
 
             setChatRows((prev) => mergeChatsById(incoming, prev));
         } catch (err: any) {
-            console.log('chat connection hydrate error:', err?.message ?? String(err));
+            console.log('chat inbox hydrate error:', err?.message ?? String(err));
         }
     }, [currentUserId]);
 
@@ -424,11 +428,11 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
         const start = () => {
             void checkUnreadNotifications();
-            void loadChatsFromConnections();
+            void loadChatsFromInbox();
             if (interval) clearInterval(interval);
             interval = setInterval(() => {
                 void checkUnreadNotifications();
-                void loadChatsFromConnections();
+                void loadChatsFromInbox();
             }, 20000);
         };
 
@@ -448,7 +452,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             if (typeof unsubFocus === 'function') unsubFocus();
             if (typeof unsubBlur === 'function') unsubBlur();
         };
-    }, [navigation, checkUnreadNotifications, loadChatsFromConnections]);
+    }, [navigation, checkUnreadNotifications, loadChatsFromInbox]);
 
     useEffect(() => {
         const type = String((lastMessage as any)?.type ?? '');
@@ -678,7 +682,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                             : 'Try a different search term.'
                     : query.trim()
                         ? 'Try a different search term.'
-                        : 'Accepted connections and new messages will appear here in realtime.'}
+                        : 'Users you message will appear here in realtime.'}
             </Text>
         </View>
     );

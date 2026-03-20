@@ -10,6 +10,12 @@ const {
     rejectFollowRequest,
     getMutualConnections,
 } = require("../utils/followfunctions");
+const {
+    getInbox,
+    sendMessage,
+    getConversationMessages,
+    getConnectionCounters,
+} = require('../utils/chatFunctions');
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
 
 // Signup Flow
@@ -33,6 +39,10 @@ router.post("/unfollow", authMiddleware, unfollowUser);
 router.post("/follow/accept", authMiddleware, acceptFollowRequest);
 router.post("/follow/reject", authMiddleware, rejectFollowRequest);
 router.get("/connections/mutual", authMiddleware, getMutualConnections);
+router.get('/connections/counters', authMiddleware, getConnectionCounters);
+router.get('/chats/inbox', authMiddleware, getInbox);
+router.get('/messages/with/:peerId', authMiddleware, getConversationMessages);
+router.post('/messages/send', authMiddleware, sendMessage);
 router.get("/notifications", authMiddleware, getNotifications);
 router.get("/notifications/unread-count", authMiddleware, getUnreadCount);
 router.delete("/notifications/:id", authMiddleware, deleteNotification);
