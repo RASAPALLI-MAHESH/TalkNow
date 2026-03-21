@@ -18,6 +18,7 @@ import MessageBubble from '@/app/components/messageComponent';
 import useAuth from '@/hooks/useAuth';
 import { getConversationMessages } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
+import { useUnread } from '@/Context/UnreadContext';
 import { Ionicons } from '@expo/vector-icons';
 import React, {
     useCallback,
@@ -76,6 +77,7 @@ interface ChatroomProps {
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
     const { lastMessage, sendMessage, markRead } = useWebSocketClient();
+    const { refreshUnreadCount } = useUnread();
     const insets = useSafeAreaInsets();
 
     const peerId = String(route?.params?.peerId ?? '').trim();
@@ -269,7 +271,13 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         const latest = messages[messages.length - 1];
         if (!latest || latest.sender !== 'other') return;
         markRead(peerId, latest.createdAt);
-    }, [markRead, messages, peerId]);
+
+        // Allow backend to process the markRead before fetching the new count
+        const timer = setTimeout(() => {
+            refreshUnreadCount();
+        }, 800);
+        return () => clearTimeout(timer);
+    }, [markRead, messages, peerId, refreshUnreadCount]);
 
     const initials = useMemo(() => {
         const name = String(user?.username ?? '').trim();

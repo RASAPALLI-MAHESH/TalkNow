@@ -10,10 +10,20 @@ const connectionSchema = new mongoose.Schema(
         },
         participants: [
             {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: 'User',
-                required: true,
-            },
+                userId: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: 'User',
+                    required: true,
+                },
+                unreadCount: {
+                    type: Number,
+                    default: 0,
+                },
+                lastReadAt: {
+                    type: Date,
+                    default: null,
+                }
+            }
         ],
         requestedBy: {
             type: mongoose.Schema.Types.ObjectId,
@@ -62,7 +72,7 @@ const connectionSchema = new mongoose.Schema(
 );
 
 connectionSchema.index({ pairKey: 1 }, { unique: true, background: true });
-connectionSchema.index({ participants: 1, status: 1, updatedAt: -1 }, { background: true });
-connectionSchema.index({ participants: 1, hasMessages: 1, lastMessageAt: -1 }, { background: true });
+connectionSchema.index({ "participants.userId": 1, status: 1, updatedAt: -1 }, { background: true });
+connectionSchema.index({ "participants.userId": 1, hasMessages: 1, lastMessageAt: -1 }, { background: true });
 
 module.exports = mongoose.model('Connection', connectionSchema);

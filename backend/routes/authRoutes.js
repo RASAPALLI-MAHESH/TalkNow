@@ -17,7 +17,7 @@ const {
     getConnectionCounters,
 } = require('../utils/chatFunctions');
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
-
+const { markAsDelivered, markAsRead, getInbox: getMessageServiceInbox, getTotalUnread, recomputeUnread } = require('../services/messageService');
 // Signup Flow
 router.post("/send-signup-otp", authController.sendSignupOtp);
 router.post("/verify-signup-otp", authController.verifySignupOtp);
@@ -43,9 +43,29 @@ router.get('/connections/counters', authMiddleware, getConnectionCounters);
 router.get('/chats/inbox', authMiddleware, getInbox);
 router.get('/messages/with/:peerId', authMiddleware, getConversationMessages);
 router.post('/messages/send', authMiddleware, sendMessage);
+router.post('/messages/read', authMiddleware, async (req, res) => {
+    try {
+        const { conversationId } = req.body;
+        if (!conversationId) return res.status(400).json({ message: 'conversationId is required' });
+        await markAsRead({ conversationId, userId: req.user._id });
+        res.status(200).json({ message: 'Marked as read' });
+    } catch (err) {
+        console.error('Error marking as read:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
 router.get("/notifications", authMiddleware, getNotifications);
 router.get("/notifications/unread-count", authMiddleware, getUnreadCount);
 router.delete("/notifications/:id", authMiddleware, deleteNotification);
+router.get("/messages/unread-count", authMiddleware, async (req, res) => {
+    try {
+        const totalUnread = await getTotalUnread(req.user._id);
+        res.json({ totalUnread });
+    } catch (err) {
+        console.error("Error fetching unread message count:", err);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
 router.get("/search-users", authMiddleware, async (req, res) => {
     try{
         const {query} = req.query;
@@ -62,4 +82,9 @@ router.get("/search-users", authMiddleware, async (req, res) => {
     }
 
 });
+router.post('/' , authMiddleware , async(req , res) => {
+    const inbox = await getMessageServiceInbox(req.user._id);
+    const totalUnread = await getTotalUnread(req.user._id);
+    res.json({ inbox , totalUnread });
+})
 module.exports = router;

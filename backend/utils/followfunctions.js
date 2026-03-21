@@ -93,7 +93,10 @@ const normalizePair = (leftId, rightId) => {
     const ids = [String(leftId || '').trim(), String(rightId || '').trim()].sort();
     return {
         pairKey: `${ids[0]}:${ids[1]}`,
-        participants: [new mongoose.Types.ObjectId(ids[0]), new mongoose.Types.ObjectId(ids[1])],
+        participants: [
+            { userId: new mongoose.Types.ObjectId(ids[0]), unreadCount: 0, lastReadAt: null },
+            { userId: new mongoose.Types.ObjectId(ids[1]), unreadCount: 0, lastReadAt: null }
+        ],
     };
 };
 
@@ -150,7 +153,6 @@ const followUser = async (req, res) => {
                 {
                     $set: {
                         pairKey: pair.pairKey,
-                        participants: pair.participants,
                         requestedBy: new mongoose.Types.ObjectId(userId),
                         requestedTo: new mongoose.Types.ObjectId(targetUserId),
                         status: 'pending',
@@ -159,6 +161,7 @@ const followUser = async (req, res) => {
                         acceptedAt: null,
                     },
                     $setOnInsert: {
+                        participants: pair.participants,
                         hasMessages: false,
                         lastMessageAt: null,
                         lastMessagePreview: '',
@@ -399,7 +402,6 @@ const acceptFollowRequest = async (req, res) => {
                     {
                         $set: {
                             pairKey: pair.pairKey,
-                            participants: pair.participants,
                             requestedBy: new mongoose.Types.ObjectId(requesterUserId),
                             requestedTo: new mongoose.Types.ObjectId(userId),
                             status: 'accepted',
@@ -407,6 +409,7 @@ const acceptFollowRequest = async (req, res) => {
                             acceptedAt: new Date(),
                         },
                         $setOnInsert: {
+                            participants: pair.participants,
                             hasMessages: false,
                             lastMessageAt: null,
                             lastMessagePreview: '',
@@ -594,25 +597,33 @@ const getMutualConnections = async (req, res) => {
         const rawConnections = await Connection.aggregate([
             {
                 $match: {
-                    participants: me,
+                    "participants.userId": me,
                     status: 'accepted',
                 },
             },
             {
                 $project: {
-                    peerIds: {
-                        $filter: {
-                            input: '$participants',
-                            as: 'id',
-                            cond: { $ne: ['$$id', me] },
-                        },
-                    },
+                    peerId: {
+                        $first: {
+                            $map: {
+                                input: {
+                                    $filter: {
+                                        input: "$participants",
+                                        as: "p",
+                                        cond: { $ne: ["$$p.userId", me] }
+                                    }
+                                },
+                                as: "peer",
+                                in: "$$peer.userId"
+                            }
+                        }
+                    }
                 },
             },
             {
                 $lookup: {
                     from: 'users',
-                    localField: 'peerIds',
+                    localField: 'peerId',
                     foreignField: '_id',
                     as: 'peerDocs',
                     pipeline: [

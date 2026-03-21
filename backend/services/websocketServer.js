@@ -130,16 +130,30 @@ const attachWebSocketServer = (httpServer) => {
                         content,
                     });
 
+                    const previewText = content.length > 500 ? content.slice(0, 497) + '...' : content;
+                    
                     await Connection.updateOne(
                         { pairKey: pair.pairKey },
                         {
                             $set: {
                                 hasMessages: true,
                                 lastMessageAt: doc.createdAt || new Date(),
-                                lastMessagePreview: content.slice(0, 500),
+                                lastMessagePreview: previewText,
                             },
+                            $inc: {
+                                "participants.$[recipient].unreadCount": 1
+                            }
+                        },
+                        {
+                            arrayFilters: [{ "recipient.userId": new mongoose.Types.ObjectId(to) }]
                         }
                     );
+
+                    // Add badge update emission to satisfy Stage 4 requirement
+                    emitToUser(to, {
+                        type: 'badge_update',
+                        connectionId: String(acceptedConnection._id),
+                    });
 
                     const payload = {
                         type: 'new_message',
@@ -223,6 +237,19 @@ const attachWebSocketServer = (httpServer) => {
                     await Message.updateMany(
                         { _id: { $in: ids }, readAt: null },
                         { $set: { readAt, deliveredAt: readAt } }
+                    );
+
+                    await Connection.updateOne(
+                        { pairKey: pair.pairKey },
+                        {
+                            $set: {
+                                "participants.$[reader].unreadCount": 0,
+                                "participants.$[reader].lastReadAt": readAt
+                            }
+                        },
+                        {
+                            arrayFilters: [{ "reader.userId": new mongoose.Types.ObjectId(readerId) }]
+                        }
                     );
 
                     emitToUser(peerId, {

@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema(
     {
+        conversationId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Connection',
+            index: true,
+            required: true
+        },
         conversationKey: {
             type: String,
             required: true,
@@ -45,7 +51,7 @@ const messageSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-messageSchema.index({ conversationKey: 1, createdAt: -1 }, { background: true });
+messageSchema.index({ conversationId: 1, createdAt: -1 }, { background: true });
 messageSchema.index({ receiverId: 1, createdAt: -1 }, { background: true });
 messageSchema.index({ participants: 1, createdAt: -1 }, { background: true });
 

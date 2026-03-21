@@ -46,7 +46,7 @@ const getInbox = async (req, res) => {
         const rows = await Connection.aggregate([
             {
                 $match: {
-                    participants: me,
+                    "participants.userId": me,
                     status: 'accepted',
                     hasMessages: true,
                     lastMessageAt: { $ne: null },
@@ -55,33 +55,48 @@ const getInbox = async (req, res) => {
             { $sort: { lastMessageAt: -1 } },
             { $limit: limit },
             {
-                $project: {
-                    pairKey: 1,
-                    lastMessageAt: 1,
-                    lastMessagePreview: 1,
-                    peerIds: {
-                        $filter: {
-                            input: '$participants',
-                            as: 'id',
-                            cond: { $ne: ['$$id', me] },
-                        },
+                $addFields: {
+                    me: {
+                        $first: {
+                            $filter: {
+                                input: "$participants",
+                                as: "p",
+                                cond: { $eq: ["$$p.userId", me] }
+                            }
+                        }
                     },
-                },
+                    peerId: {
+                        $first: {
+                            $map: {
+                                input: {
+                                    $filter: {
+                                        input: "$participants",
+                                        as: "p",
+                                        cond: { $ne: ["$$p.userId", me] }
+                                    }
+                                },
+                                as: "peer",
+                                in: "$$peer.userId"
+                            }
+                        }
+                    }
+                }
             },
             {
                 $lookup: {
-                    from: 'users',
-                    localField: 'peerIds',
-                    foreignField: '_id',
-                    as: 'peerDocs',
+                    from: "users",
+                    localField: "peerId",
+                    foreignField: "_id",
+                    as: "peerDocs",
                     pipeline: [{ $project: { _id: 1, username: 1, profilePicture: 1 } }],
-                },
+                }
             },
             {
                 $project: {
                     pairKey: 1,
                     lastMessageAt: 1,
                     lastMessagePreview: 1,
+                    unreadCount: "$me.unreadCount",
                     peer: { $arrayElemAt: ['$peerDocs', 0] },
                 },
             },
@@ -98,6 +113,7 @@ const getInbox = async (req, res) => {
                     : 'New message',
                 date: row.lastMessageAt ? new Date(row.lastMessageAt).toISOString() : '',
                 conversationKey: String(row.pairKey || ''),
+                unreadCount: row.unreadCount || 0,
             }));
 
         return res.status(200).json({ chats });
@@ -135,6 +151,7 @@ const sendMessage = async (req, res) => {
         const now = new Date();
 
         const doc = await Message.create({
+            conversationId: acceptedConnection._id,
             conversationKey: pair.pairKey,
             participants: pair.participantObjectIds,
             senderId: new mongoose.Types.ObjectId(fromUserId),
@@ -142,14 +159,22 @@ const sendMessage = async (req, res) => {
             content,
         });
 
+        const previewText = content.length > 500 ? content.slice(0, 497) + '...' : content;
+
         await Connection.updateOne(
-            { pairKey: pair.pairKey },
+            { _id: acceptedConnection._id },
             {
                 $set: {
                     hasMessages: true,
                     lastMessageAt: now,
-                    lastMessagePreview: content.slice(0, 500),
+                    lastMessagePreview: previewText,
                 },
+                $inc: {
+                    "participants.$[recipient].unreadCount": 1
+                }
+            },
+            {
+                arrayFilters: [{ "recipient.userId": new mongoose.Types.ObjectId(toUserId) }]
             }
         );
 
@@ -230,7 +255,7 @@ const getConnectionCounters = async (req, res) => {
         const me = new mongoose.Types.ObjectId(userId);
 
         const [counts] = await Connection.aggregate([
-            { $match: { participants: me } },
+            { $match: { "participants.userId": me } },
             {
                 $group: {
                     _id: null,

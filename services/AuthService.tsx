@@ -361,6 +361,11 @@ export const getUnreadNotificationCount = async (sinceIso: string): Promise<{ un
     return response.data;
 };
 
+export const getUnreadMessageCount = async (): Promise<{ totalUnread: number }> => {
+    const response = await client.get('/messages/unread-count');
+    return response.data;
+};
+
 export const deleteNotification = async (notificationId: string): Promise<{ ok: boolean }> => {
     const response = await client.delete(`/notifications/${encodeURIComponent(notificationId)}`);
     return response.data;
@@ -387,6 +392,7 @@ const AuthService = {
     sendMessageToUser,
     getNotifications,
     getUnreadNotificationCount,
+    getUnreadMessageCount,
     deleteNotification,
 };
 

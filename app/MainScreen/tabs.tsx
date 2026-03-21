@@ -7,6 +7,8 @@ import ChatsScreen from './mainTabs/ChatsScreen';
 import SettingsScreen from './mainTabs/SettingsScreen';
 import StatusScreen from './mainTabs/StatusScreen';
 
+import { useUnread } from '@/Context/UnreadContext';
+
 export type MainTabParamList = {
     Chats: undefined;
     Status: undefined;
@@ -17,6 +19,7 @@ export type MainTabParamList = {
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 const MainTabs = () => {
+    const { totalUnread } = useUnread();
     return (
         <Tab.Navigator
             screenOptions={({ route }) => ({
@@ -47,7 +50,11 @@ const MainTabs = () => {
                 },
             })}
         >
-            <Tab.Screen name="Chats" component={ChatsScreen}/>
+            <Tab.Screen 
+                name="Chats" 
+                component={ChatsScreen}
+                options={{ tabBarBadge: totalUnread > 0 ? totalUnread : undefined }}
+            />
             <Tab.Screen name="Status" component={StatusScreen} />
             <Tab.Screen name="AI" component={AIScreen} />
             <Tab.Screen name="Settings" component={SettingsScreen} />

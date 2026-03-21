@@ -10,6 +10,7 @@ import {
     type ChatInboxDto,
 } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
+import { useUnread } from '@/Context/UnreadContext';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
@@ -361,6 +362,7 @@ const GlobalChatRow = ({
 
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const { lastMessage } = useWebSocketClient();
+    const { refreshUnreadCount } = useUnread();
 
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
@@ -438,10 +440,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         const start = () => {
             void checkUnreadNotifications();
             void loadChatsFromInbox();
+            refreshUnreadCount();
             if (interval) clearInterval(interval);
             interval = setInterval(() => {
                 void checkUnreadNotifications();
                 void loadChatsFromInbox();
+                refreshUnreadCount();
             }, 20000);
         };
 
@@ -461,11 +465,13 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             if (typeof unsubFocus === 'function') unsubFocus();
             if (typeof unsubBlur === 'function') unsubBlur();
         };
-    }, [navigation, checkUnreadNotifications, loadChatsFromInbox]);
+    }, [navigation, checkUnreadNotifications, loadChatsFromInbox, refreshUnreadCount]);
 
     useEffect(() => {
         const type = String((lastMessage as any)?.type ?? '');
         if (type !== 'new_message' && type !== 'sent') return;
+        
+        if (type === 'new_message') refreshUnreadCount();
 
         const from = String((lastMessage as any)?.from ?? '').trim();
         const to = String((lastMessage as any)?.to ?? '').trim();
