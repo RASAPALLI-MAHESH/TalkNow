@@ -133,7 +133,9 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             profilePicture: typeof payload?.profilePicture === 'string' ? payload.profilePicture : '',
             message: String(payload?.message ?? ''),
             createdAt: typeof payload?.createdAt === 'string' ? payload.createdAt : new Date().toISOString(),
-            type: typeof payload?.type === 'string' ? payload.type : undefined,
+            type: typeof payload?.notificationType === 'string'
+                ? payload.notificationType
+                : (typeof payload?.type === 'string' && payload.type !== 'new_notification' ? payload.type : undefined),
             fromUserId: typeof payload?.fromUserId === 'string' ? payload.fromUserId : undefined,
         };
 

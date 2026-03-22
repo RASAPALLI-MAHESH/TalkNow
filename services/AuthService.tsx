@@ -294,6 +294,7 @@ export type ChatInboxDto = {
     lastMessage: string;
     date?: string;
     conversationKey?: string;
+    unreadCount?: number;
 };
 
 export type ConversationMessageDto = {

@@ -37,9 +37,13 @@ const emitToUser = (userId, payload) => {
  * Alias for emitToUser for semantic clarity in notification flows.
  */
 const emitNotification = (toUserId, payload) => {
+    // Destructure the notification's own `type` (e.g. 'follow_request') so it
+    // doesn't collide with the WebSocket envelope `type: 'new_notification'`.
+    const { type: notificationType, ...rest } = payload;
     return emitToUser(toUserId, {
         type: 'new_notification',
-        ...payload
+        notificationType: notificationType || undefined,
+        ...rest,
     });
 };
 

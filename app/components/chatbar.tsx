@@ -4,6 +4,7 @@ export type ChatListItem = {
   profilePicture?: string;
   lastMessage: string;
   Date: string;
+  unreadCount?: number;
 };
 
 // Global search rows are username-only.

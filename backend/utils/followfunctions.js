@@ -88,7 +88,7 @@ const followUser = async (req, res) => {
         }
 
         const actor = await User.findById(userId).select('_id username profilePicture').lean();
-        const message = 'sent you a follow request';
+        const message = 'started following you';
 
         let doc;
         try {
@@ -140,6 +140,7 @@ const followUser = async (req, res) => {
         }
 
         const payload = {
+            type: 'follow_request',
             id: String(doc._id),
             username: toSafeUsername(actor?.username),
             profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
@@ -389,6 +390,7 @@ const acceptFollowRequest = async (req, res) => {
         }
 
         const payload = {
+            type: 'follow_accept',
             id: String(doc._id),
             username: toSafeUsername(currentUser?.username),
             profilePicture: currentUser?.profilePicture ? String(currentUser.profilePicture) : '',
@@ -554,7 +556,7 @@ const getMutualConnections = async (req, res) => {
                                         cond: { $ne: ["$$p.userId", me] }
                                     }
                                 },
-                                arm: "peer",
+                                as: "peer",
                                 in: "$$peer.userId"
                             }
                         }

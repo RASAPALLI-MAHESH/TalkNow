@@ -100,6 +100,8 @@ const mergeChatsById = (incoming: ChatListItem[], existing: ChatListItem[]) => {
                 typeof next.profilePicture === 'string' && next.profilePicture.trim().length > 0
                     ? next.profilePicture
                     : prev.profilePicture,
+            // Prefer incoming unreadCount (from API); keep existing if incoming doesn't specify.
+            unreadCount: typeof next.unreadCount === 'number' ? next.unreadCount : (prev.unreadCount ?? 0),
         });
     }
 
@@ -292,10 +294,25 @@ const ChatRow = ({
 
             <View style={styles.rowContent}>
                 <View style={styles.rowTop}>
-                    <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.time} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
+                    <Text style={[styles.name, (item.unreadCount ?? 0) > 0 && styles.nameUnread]} numberOfLines={1}>{item.name}</Text>
+                    <Text style={[
+                        styles.time,
+                        (item.unreadCount ?? 0) > 0 && styles.timeUnread,
+                    ]} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
                 </View>
-                <Text style={styles.lastMessage} numberOfLines={1}>{item.lastMessage}</Text>
+                <View style={styles.rowBottom}>
+                    <Text style={[
+                        styles.lastMessage,
+                        (item.unreadCount ?? 0) > 0 && styles.lastMessageUnread,
+                    ]} numberOfLines={1}>{item.lastMessage}</Text>
+                    {(item.unreadCount ?? 0) > 0 && (
+                        <View style={styles.unreadBadge}>
+                            <Text style={styles.unreadBadgeText}>
+                                {(item.unreadCount ?? 0) > 99 ? '99+' : item.unreadCount}
+                            </Text>
+                        </View>
+                    )}
+                </View>
             </View>
         </Pressable>
     );
@@ -408,6 +425,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
                 lastMessage: typeof u.lastMessage === 'string' && u.lastMessage.trim() ? u.lastMessage : 'New message',
                 Date: typeof u.date === 'string' ? u.date : '',
+                unreadCount: typeof u.unreadCount === 'number' ? u.unreadCount : 0,
             }));
 
             setChatRows((prev) => mergeChatsById(incoming, prev));
@@ -483,6 +501,8 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         const peerId = from === currentUserId ? to : from;
         if (!peerId) return;
 
+        const isIncoming = type === 'new_message';
+
         setChatRows((prev) => {
             const idx = prev.findIndex((row) => String(row.id) === peerId);
             if (idx === -1) {
@@ -492,6 +512,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     profilePicture: '',
                     lastMessage: content || 'New message',
                     Date: date,
+                    unreadCount: isIncoming ? 1 : 0,
                 };
                 return mergeChatsById([created], prev);
             }
@@ -501,6 +522,9 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 ...updated[idx],
                 lastMessage: content || 'New message',
                 Date: date,
+                unreadCount: isIncoming
+                    ? (updated[idx].unreadCount ?? 0) + 1
+                    : updated[idx].unreadCount ?? 0,
             };
             return mergeChatsById([], updated);
         });
@@ -706,13 +730,19 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const renderChatItem = ({ item }: { item: ChatListItem }) => (
         <ChatRow
             item={item}
-            onPress={() =>
+            onPress={() => {
+                // Clear unread badge for this chat immediately
+                setChatRows((prev) =>
+                    prev.map((row) =>
+                        row.id === item.id ? { ...row, unreadCount: 0 } : row
+                    )
+                );
                 navigation.navigate('Chatroom', {
                     peerId: item.id,
                     peerUsername: item.name,
                     peerAvatar: item.profilePicture,
-                })
-            }
+                });
+            }}
         />
     );
 
@@ -1271,6 +1301,39 @@ const styles = StyleSheet.create({
         fontSize: 13,
         color: '#666',
         flexShrink: 1,
+        flex: 1,
+    },
+    lastMessageUnread: {
+        color: '#111',
+        fontWeight: '600',
+    },
+    nameUnread: {
+        fontWeight: '800',
+    },
+    timeUnread: {
+        color: '#25d366',
+        fontWeight: '600',
+    },
+    rowBottom: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    unreadBadge: {
+        minWidth: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: '#25d366',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 5,
+        marginLeft: 8,
+        flexShrink: 0,
+    },
+    unreadBadgeText: {
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: '800',
+        includeFontPadding: false,
     },
 
     emptyWrap: {
