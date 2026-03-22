@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Connection = require('../models/connection');
+const User = require('../models/user');
 
 const users = new Map();
 
@@ -154,7 +155,7 @@ const attachWebSocketServer = (httpServer) => {
                     });
 
                     const previewText = content.length > 500 ? content.slice(0, 497) + '...' : content;
-                    
+
                     await Connection.updateOne(
                         { pairKey: pair.pairKey },
                         {
@@ -178,12 +179,16 @@ const attachWebSocketServer = (httpServer) => {
                         connectionId: String(acceptedConnection._id),
                     });
 
+                    const senderObj = await User.findById(from).select('username profilePicture').lean();
+
                     const payload = {
                         type: 'new_message',
                         id: String(doc._id),
                         conversationKey: pair.pairKey,
                         to,
                         from,
+                        senderName: senderObj?.username,
+                        senderAvatar: senderObj?.profilePicture,
                         content,
                         clientId: data?.clientId ? String(data.clientId) : undefined,
                         date: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
