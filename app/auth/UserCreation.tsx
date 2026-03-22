@@ -14,7 +14,8 @@ import {
     TouchableWithoutFeedback,
     View,
 } from 'react-native';
-import { authStyles } from './authStyles';
+import { Ionicons } from '@expo/vector-icons';
+import { authStyles, AUTH_COLORS } from './authStyles';
 
 const UserCreation = ({ route, navigation }: {route: any, navigation: any}) => {
     const { signUp } = useAuth();
@@ -48,13 +49,17 @@ const UserCreation = ({ route, navigation }: {route: any, navigation: any}) => {
                 style={authStyles.screen}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled">
+                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                    <View style={authStyles.iconWrap}>
+                        <Ionicons name="sparkles-outline" size={26} color="#710b8d" />
+                    </View>
                     <Text style={authStyles.title}>Final Step</Text>
                     <Text style={authStyles.subtitle}>Pick a username and password to finish.</Text>
 
                     <Text style={authStyles.label}>Username</Text>
                     <TextInput
                         placeholder="e.g. tech_guru99"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={username}
                         onChangeText={setUserName}
@@ -66,6 +71,7 @@ const UserCreation = ({ route, navigation }: {route: any, navigation: any}) => {
                     <Text style={authStyles.label}>Password</Text>
                     <TextInput
                         placeholder="At least 6 characters"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={password}
                         onChangeText={setPassword}
@@ -77,7 +83,11 @@ const UserCreation = ({ route, navigation }: {route: any, navigation: any}) => {
                     />
 
                     <Pressable
-                        style={[authStyles.button, (!isFormValid || loading) && authStyles.buttonDisabled]}
+                        style={({ pressed }) => [
+                            authStyles.button,
+                            pressed && authStyles.buttonPressed,
+                            (!isFormValid || loading) && authStyles.buttonDisabled
+                        ]}
                         onPress={handleCreateAccount}
                         disabled={!isFormValid || loading}
                     >
@@ -88,8 +98,8 @@ const UserCreation = ({ route, navigation }: {route: any, navigation: any}) => {
                         )}
                     </Pressable>
 
-                    <View style={{ marginTop: 14 }}>
-                        <Text>
+                    <View style={authStyles.bottomTextContainer}>
+                        <Text style={authStyles.bottomText}>
                             Need to change email?{' '}
                             <Text style={authStyles.link} onPress={() => navigation.navigate('SignUp')}>Go back</Text>
                         </Text>
@@ -98,5 +108,5 @@ const UserCreation = ({ route, navigation }: {route: any, navigation: any}) => {
             </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
     )
-}
+};
 export default UserCreation;

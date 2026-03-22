@@ -1,10 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { io } from 'socket.io-client';
 import useAuth from '../../hooks/useAuth';
 import {
     acceptFollowRequest as acceptFollowRequestApi,
@@ -15,9 +13,11 @@ import {
     type MutualConnectionDto,
     type NotificationDto,
 } from '../../services/AuthService';
+import { useWebSocketClient } from '../../services/WebSocketClient';
 import AvatarPicker from './AvatarPicker';
 import FollowRequestComponent from './followRequestComponent';
 import FollowRequestNotification from './followrequestNotification';
+
 const HEADER_HEIGHT = 56;
 const TAB_TITLES = ['Notifications', 'Follow requests', 'All collections'] as const;
 
@@ -53,64 +53,11 @@ const mergeByIdNewestFirst = (incoming: NotificationItem[], existing: Notificati
     return merged;
 };
 
-const inferDevServerBaseUrl = (): string | null => {
-    const hostUri = (Constants as any)?.expoConfig?.hostUri as string | undefined;
-    if (!hostUri || typeof hostUri !== 'string') return null;
-
-    const host = hostUri.split(':')[0]?.trim();
-    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
-    return `http://${host}:8080`;
-};
-
-const getDefaultApiUrl = (): string => {
-    const envUrl = process.env.EXPO_PUBLIC_API_URL;
-    if (typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
-
-    const inferred = inferDevServerBaseUrl();
-    if (inferred) return inferred;
-
-    if (Platform.OS === 'android') return 'http://10.0.2.2:8080';
-    return 'http://localhost:8080';
-};
-
-const normalizeApiOrigin = (rawUrl: string) => {
-    const trimmed = rawUrl.trim().replace(/\/$/, '');
-    const withScheme = /^https?:\/\//i.test(trimmed)
-        ? trimmed
-        : (() => {
-            const looksLocal =
-                /^localhost\b/i.test(trimmed) ||
-                /^127\.0\.0\.1\b/.test(trimmed) ||
-                /^\d{1,3}(?:\.\d{1,3}){3}\b/.test(trimmed);
-            return `${looksLocal ? 'http' : 'https'}://${trimmed}`;
-        })();
-
-    const withoutAuth = withScheme.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
-    const base = withoutAuth.replace(/\/$/, '');
-
-    // Common deployment mistake: using https with :8080. Render serves 443 externally.
-    // Strip :8080 for non-local https URLs.
-    const stripped8080 = base.replace(/^(https:\/\/[^/]+):8080(\/|$)/i, '$1$2');
-
-    // If you're pointing at Render with an http URL, Socket.IO polling can fail
-    // due to redirects. Upgrade to https for non-local hosts with no explicit port.
-    if (
-        stripped8080.startsWith('http://') &&
-        !stripped8080.includes('localhost') &&
-        !stripped8080.includes('127.0.0.1') &&
-        !/:\d+$/.test(stripped8080)
-    ) {
-        return `https://${stripped8080.slice('http://'.length)}`;
-    }
-    return stripped8080;
-};
-
 const Notifications = ({ navigation }: { navigation: any }) => {
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
 
-    const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
-    const socketRef = useRef<ReturnType<typeof io> | null>(null);
+    const { lastMessage } = useWebSocketClient();
     const pagerRef = useRef<ScrollView | null>(null);
     const [items, setItems] = useState<NotificationItem[]>([]);
     const [loading, setLoading] = useState(false);
@@ -165,77 +112,34 @@ const Notifications = ({ navigation }: { navigation: any }) => {
             // Mark as seen after a successful fetch.
             await SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
         } catch (err: any) {
-            // Keep UI usable even if API is temporarily unreachable.
-            console.log('notification fetch error:', { apiOrigin, message: err?.message ?? String(err) });
+            console.log('notification fetch error:', err?.message ?? String(err));
         } finally {
             setLoading(false);
         }
-    }, [apiOrigin, currentUserId]);
+    }, [currentUserId]);
 
     useEffect(() => {
         void loadNotifications();
     }, [loadNotifications]);
 
     useEffect(() => {
-        // Create socket once per apiOrigin. Do NOT depend on currentUserId here,
-        // otherwise effect re-runs will disconnect the socket immediately.
-        const socket = io(apiOrigin, {
-            // Render/proxies often fail websocket upgrades from mobile clients.
-            // Polling is the most reliable transport here.
-            transports: ['polling'],
-            upgrade: false,
-            path: '/socket.io',
-            reconnection: true,
-            timeout: 20000,
-        });
+        const type = String((lastMessage as any)?.type ?? '');
+        if (type !== 'new_notification') return;
 
-        socketRef.current = socket;
-
-        socket.on('connect', () => {
-            console.log('notification socket connected:', { apiOrigin, socketId: socket.id });
-        });
-
-        socket.on('disconnect', (reason: any) => {
-            console.log('notification socket disconnected:', { apiOrigin, reason });
-        });
-
-        socket.on('connect_error', (err: any) => {
-            console.log('notification socket connect_error:', {
-                apiOrigin,
-                message: err?.message ?? String(err),
-                description: err?.description,
-                type: err?.type,
-            });
-        });
-// the notifiction socket receives new_notification events with the following payload:
-        socket.on('new_notification', (notification: any) => {
-            const normalized: NotificationItem = {
-                id: String(notification?.id ?? `${Date.now()}`),
-                username: String(notification?.username ?? 'User'),
-                profilePicture: typeof notification?.profilePicture === 'string' ? notification.profilePicture : '',
-                message: String(notification?.message ?? ''),
-                createdAt: typeof notification?.createdAt === 'string' ? notification.createdAt : undefined,
-                type: typeof notification?.type === 'string' ? notification.type : undefined,
-                fromUserId: typeof notification?.fromUserId === 'string' ? notification.fromUserId : undefined,
-            };
-
-            console.log('notification received:', { apiOrigin, normalized });
-
-            setItems((prev) => [normalized, ...prev]);
-
-            // If you're already on this screen, treat it as seen.
-            void SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
-        });
-
-        return () => {
-            socket.off('connect_error');
-            socket.off('new_notification');
-            socket.off('connect');
-            socket.off('disconnect');
-            socket.disconnect();
-            socketRef.current = null;
+        const payload = lastMessage as any;
+        const normalized: NotificationItem = {
+            id: String(payload?.id ?? `${Date.now()}`),
+            username: String(payload?.username ?? 'User'),
+            profilePicture: typeof payload?.profilePicture === 'string' ? payload.profilePicture : '',
+            message: String(payload?.message ?? ''),
+            createdAt: typeof payload?.createdAt === 'string' ? payload.createdAt : new Date().toISOString(),
+            type: typeof payload?.type === 'string' ? payload.type : undefined,
+            fromUserId: typeof payload?.fromUserId === 'string' ? payload.fromUserId : undefined,
         };
-    }, [apiOrigin]);
+
+        setItems((prev) => mergeByIdNewestFirst([normalized], prev));
+        void SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
+    }, [lastMessage]);
 
     const dismissNotification = async (id: string) => {
         const trimmed = String(id || '').trim();
@@ -249,8 +153,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         try {
             await deleteNotification(trimmed);
         } catch (err: any) {
-            console.log('notification dismiss error:', { apiOrigin, message: err?.message ?? String(err) });
-            // Rollback so user doesn't lose it if delete failed.
+            console.log('notification dismiss error:', err?.message ?? String(err));
             if (snapshot) setItems(snapshot);
         }
     };
@@ -273,11 +176,11 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
             setConnections(normalized);
         } catch (err: any) {
-            console.log('connections fetch error:', { apiOrigin, message: err?.message ?? String(err) });
+            console.log('connections fetch error:', err?.message ?? String(err));
         } finally {
             setConnectionsLoading(false);
         }
-    }, [apiOrigin, currentUserId]);
+    }, [currentUserId]);
 
     const handlePullToRefresh = useCallback(async () => {
         if (refreshing) return;
@@ -307,10 +210,9 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         } catch (err: any) {
             const status = Number(err?.response?.status);
             if (status === 404) {
-                // Already handled on backend or stale client state; treat as processed.
                 await loadConnections();
             } else {
-                console.log('follow request accept error:', { apiOrigin, message: err?.message ?? String(err), status });
+                console.log('follow request accept error:', err?.message ?? String(err), status);
                 if (snapshot) setItems(snapshot);
             }
         } finally {
@@ -335,7 +237,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         } catch (err: any) {
             const status = Number(err?.response?.status);
             if (status !== 404) {
-                console.log('follow request reject error:', { apiOrigin, message: err?.message ?? String(err), status });
+                console.log('follow request reject error:', err?.message ?? String(err), status);
                 if (snapshot) setItems(snapshot);
             }
         } finally {
@@ -346,35 +248,6 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     useEffect(() => {
         void loadConnections();
     }, [loadConnections]);
-
-    useEffect(() => {
-        const socket = socketRef.current;
-        if (!socket) return;
-        if (!currentUserId) return;
-
-        const doRegister = () => {
-            if (!socket.connected) return;
-            try {
-                socket.timeout(5000).emit('register', currentUserId, (err: any, res: any) => {
-                    if (err) {
-                        console.log('notification socket register timeout/error:', { apiOrigin, err });
-                        return;
-                    }
-                    console.log('notification socket registered:', { apiOrigin, res });
-                });
-            } catch (err: any) {
-                console.log('notification socket register exception:', { apiOrigin, message: err?.message ?? String(err) });
-            }
-        };
-
-        // Register immediately if connected; otherwise on next connect.
-        if (socket.connected) doRegister();
-        socket.on('connect', doRegister);
-
-        return () => {
-            socket.off('connect', doRegister);
-        };
-    }, [apiOrigin, currentUserId]);
 
     return (
         <SafeAreaView style={styles.container} edges={['top']}>

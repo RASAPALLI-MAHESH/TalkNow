@@ -14,7 +14,8 @@ import {
     TouchableWithoutFeedback,
     View,
 } from "react-native";
-import { authStyles } from "./authStyles";
+import { Ionicons } from "@expo/vector-icons";
+import { authStyles, AUTH_COLORS } from "./authStyles";
 
 const SignUpScreen = ({navigation} : {navigation : any}) => {
     const { sendSignupOtp } = useAuth();
@@ -39,19 +40,23 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
             setLoading(false);
         }
     }
-	return (
+    return (
         <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <KeyboardAvoidingView
                 style={authStyles.screen}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled">
-                    <Text style={authStyles.title}>{"Welcome! Let's get started."}</Text>
-                    <Text style={authStyles.subtitle}>Verify your email to create an account.</Text>
+                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                    <View style={authStyles.iconWrap}>
+                        <Ionicons name="person-add-outline" size={26} color="#710b8d" />
+                    </View>
+                    <Text style={authStyles.title}>{"Create an account"}</Text>
+                    <Text style={authStyles.subtitle}>Get started by filling out your details below.</Text>
 
                     <Text style={authStyles.label}>First Name</Text>
                     <TextInput
                         placeholder="Enter your first name"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={name}
                         onChangeText={setname}
@@ -61,6 +66,7 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
                     <Text style={authStyles.label}>Email</Text>
                     <TextInput
                         placeholder="talknow@example.com"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={email}
                         onChangeText={setemail}
@@ -74,7 +80,11 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
                     />
 
                     <Pressable
-                        style={[authStyles.button, (!isFormValid || loading) && authStyles.buttonDisabled]}
+                        style={({ pressed }) => [
+                            authStyles.button,
+                            pressed && authStyles.buttonPressed,
+                            (!isFormValid || loading) && authStyles.buttonDisabled
+                        ]}
                         onPress={handleVerify}
                         disabled={!isFormValid || loading}
                     >
@@ -85,8 +95,8 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
                         )}
                     </Pressable>
 
-                    <View style={{ marginTop: 14 }}>
-                        <Text>
+                    <View style={authStyles.bottomTextContainer}>
+                        <Text style={authStyles.bottomText}>
                             Already have an account?{' '}
                             <Text style={authStyles.link} onPress={() => navigation.navigate('Login')}>Login</Text>
                         </Text>
@@ -94,6 +104,6 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
                 </ScrollView>
             </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
-	);
+    );
 };
 export default SignUpScreen;

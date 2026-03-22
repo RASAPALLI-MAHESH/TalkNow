@@ -14,7 +14,8 @@ import {
     TouchableWithoutFeedback,
     View,
 } from 'react-native';
-import { authStyles } from './authStyles';
+import { Ionicons } from '@expo/vector-icons';
+import { authStyles, AUTH_COLORS } from './authStyles';
 
 const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
     const { forgotPassword } = useAuth();
@@ -45,13 +46,17 @@ const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
                 style={authStyles.screen}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled">
+                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                    <View style={authStyles.iconWrap}>
+                        <Ionicons name="key-outline" size={26} color="#710b8d" />
+                    </View>
                     <Text style={authStyles.title}>Forgot Password</Text>
                     <Text style={authStyles.subtitle}>Enter your email to receive a reset code.</Text>
 
                     <Text style={authStyles.label}>Email</Text>
                     <TextInput
                         placeholder="talknow@example.com"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={email}
                         onChangeText={setEmail}
@@ -65,7 +70,11 @@ const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
                     />
 
                     <Pressable
-                        style={[authStyles.button, (!isValidEmail || loading) && authStyles.buttonDisabled]}
+                        style={({ pressed }) => [
+                            authStyles.button,
+                            pressed && authStyles.buttonPressed,
+                            (!isValidEmail || loading) && authStyles.buttonDisabled
+                        ]}
                         onPress={handleSendOTP}
                         disabled={!isValidEmail || loading}
                     >
@@ -76,8 +85,8 @@ const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
                         )}
                     </Pressable>
 
-                    <View style={{ marginTop: 14 }}>
-                        <Text>
+                    <View style={authStyles.bottomTextContainer}>
+                        <Text style={authStyles.bottomText}>
                             Remembered it?{' '}
                             <Text style={authStyles.link} onPress={() => navigation.navigate('Login')}>Back to Login</Text>
                         </Text>
@@ -86,5 +95,5 @@ const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
             </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
     )
-}
-export default ForgotPasswordScreen
+};
+export default ForgotPasswordScreen;

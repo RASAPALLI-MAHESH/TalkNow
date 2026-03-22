@@ -5,7 +5,13 @@ const Connection = require('../models/connection');
 
 const users = new Map();
 
-const toSafeId = (value) => String(value || '').trim();
+const toSafeId = (value) => {
+    if (value && typeof value === 'object') {
+        if (value._id) return String(value._id).trim();
+        if (value.id) return String(value.id).trim();
+    }
+    return String(value || '').trim();
+};
 const isValidObjectId = (value) => mongoose.Types.ObjectId.isValid(toSafeId(value));
 
 const normalizePair = (leftId, rightId) => {
@@ -17,7 +23,8 @@ const normalizePair = (leftId, rightId) => {
 };
 
 const emitToUser = (userId, payload) => {
-    const recipient = users.get(String(userId || '').trim());
+    const cleanId = toSafeId(userId);
+    const recipient = users.get(cleanId);
     if (recipient && recipient.readyState === WebSocket.OPEN) {
         recipient.send(JSON.stringify(payload));
         return true;
@@ -25,7 +32,18 @@ const emitToUser = (userId, payload) => {
     return false;
 };
 
-const toObjectId = (value) => new mongoose.Types.ObjectId(String(value).trim());
+/**
+ * Sends a notification payload to a specific user.
+ * Alias for emitToUser for semantic clarity in notification flows.
+ */
+const emitNotification = (toUserId, payload) => {
+    return emitToUser(toUserId, {
+        type: 'new_notification',
+        ...payload
+    });
+};
+
+const toObjectId = (value) => new mongoose.Types.ObjectId(toSafeId(value));
 
 /**
  * Attaches a WebSocket server to an existing HTTP server.
@@ -46,7 +64,7 @@ const attachWebSocketServer = (httpServer) => {
 
             try {
                 if (data?.type === 'register') {
-                    const userId = String(data.userId || '').trim();
+                    const userId = toSafeId(data.userId);
                     if (!userId) {
                         ws.send(JSON.stringify({ type: 'error', message: 'userId is required for register' }));
                         return;
@@ -89,8 +107,8 @@ const attachWebSocketServer = (httpServer) => {
                 }
 
                 if (data?.type === 'send_message') {
-                    const to = String(data.to || '').trim();
-                    const from = String(data.from || '').trim();
+                    const to = toSafeId(data.to);
+                    const from = toSafeId(data.from);
                     const content = String(data.content || '').trim();
 
                     if (!isValidObjectId(to) || !isValidObjectId(from)) {
@@ -199,8 +217,8 @@ const attachWebSocketServer = (httpServer) => {
                 }
 
                 if (data?.type === 'mark_read') {
-                    const readerId = String(ws.userId || '').trim();
-                    const peerId = String(data.peerId || '').trim();
+                    const readerId = toSafeId(ws.userId);
+                    const peerId = toSafeId(data.peerId);
                     const upTo = String(data.upTo || '').trim();
 
                     if (!isValidObjectId(readerId) || !isValidObjectId(peerId)) {
@@ -280,4 +298,4 @@ const attachWebSocketServer = (httpServer) => {
 };
 
 
-module.exports = { attachWebSocketServer, emitToUser };
+module.exports = { attachWebSocketServer, emitToUser, emitNotification };

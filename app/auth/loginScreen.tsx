@@ -14,7 +14,8 @@ import {
     TouchableWithoutFeedback,
     View,
 } from "react-native";
-import { authStyles } from "./authStyles";
+import { Ionicons } from "@expo/vector-icons";
+import { authStyles, AUTH_COLORS } from "./authStyles";
 
 const LoginScreen = ({navigation} : {navigation : any}) => {
     const { Login } = useAuth();
@@ -30,7 +31,6 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
             const username = UserName.trim();
             const pwd = password;
             await Login(username, pwd);
-            // On success, AuthProvider will automatically re-render and main app navigator will switch to protected route
         } catch (error: any) {
             Alert.alert("Login Failed", getAuthErrorMessage(error, "Please check your credentials and try again."));
         } finally {
@@ -44,12 +44,17 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
                 style={authStyles.screen}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled">
-                    <Text style={authStyles.title}>Login</Text>
+                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                    <View style={authStyles.iconWrap}>
+                        <Ionicons name="log-in-outline" size={28} color="#710b8d" />
+                    </View>
+                    <Text style={authStyles.title}>Welcome back</Text>
+                    <Text style={authStyles.subtitle}>Enter your details to sign in to your account.</Text>
 
                     <Text style={authStyles.label}>Username</Text>
                     <TextInput
                         placeholder="Enter username"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={UserName}
                         onChangeText={setUserName}
@@ -61,6 +66,7 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
                     <Text style={authStyles.label}>Password</Text>
                     <TextInput
                         placeholder="Enter password"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={password}
                         onChangeText={setPassword}
@@ -77,7 +83,11 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
                     </View>
 
                     <Pressable
-                        style={[authStyles.button, (!isFormValid || loading) && authStyles.buttonDisabled]}
+                        style={({ pressed }) => [
+                            authStyles.button,
+                            pressed && authStyles.buttonPressed,
+                            (!isFormValid || loading) && authStyles.buttonDisabled
+                        ]}
                         onPress={handleLogin}
                         disabled={!isFormValid || loading}
                     >
@@ -88,8 +98,8 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
                         )}
                     </Pressable>
 
-                    <View style={{ marginTop: 14 }}>
-                        <Text>
+                    <View style={authStyles.bottomTextContainer}>
+                        <Text style={authStyles.bottomText}>
                             {"Don't have an account? "}
                             <Text style={authStyles.link} onPress={() => navigation.navigate("SignUp")}>Sign Up</Text>
                         </Text>
@@ -98,5 +108,5 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
             </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
     );
-}
+};
 export default LoginScreen;

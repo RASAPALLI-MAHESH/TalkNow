@@ -14,7 +14,8 @@ import {
     TouchableWithoutFeedback,
     View,
 } from 'react-native';
-import { authStyles } from './authStyles';
+import { Ionicons } from '@expo/vector-icons';
+import { authStyles, AUTH_COLORS } from './authStyles';
 
 const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: any}) => {
     const { resetPassword } = useAuth();
@@ -48,13 +49,17 @@ const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: an
                 style={authStyles.screen}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled">
+                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                    <View style={authStyles.iconWrap}>
+                        <Ionicons name="lock-closed-outline" size={26} color="#710b8d" />
+                    </View>
                     <Text style={authStyles.title}>Reset Password</Text>
                     <Text style={authStyles.subtitle}>Enter the 6-digit code sent to your email.</Text>
 
                     <Text style={authStyles.label}>OTP</Text>
                     <TextInput
                         placeholder="123456"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={otp}
                         onChangeText={(text) => setOtp(text.replace(/\D/g, '').slice(0, 6))}
@@ -66,6 +71,7 @@ const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: an
                     <Text style={authStyles.label}>New Password</Text>
                     <TextInput
                         placeholder="At least 6 characters"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={newPassword}
                         onChangeText={setNewPassword}
@@ -76,6 +82,7 @@ const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: an
                     <Text style={authStyles.label}>Confirm Password</Text>
                     <TextInput
                         placeholder="Re-enter new password"
+                        placeholderTextColor={AUTH_COLORS.placeholder}
                         style={authStyles.input}
                         value={confirmPassword}
                         onChangeText={setConfirmPassword}
@@ -87,7 +94,11 @@ const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: an
                     />
 
                     <Pressable
-                        style={[authStyles.button, (!isFormValid || loading) && authStyles.buttonDisabled]}
+                        style={({ pressed }) => [
+                            authStyles.button,
+                            pressed && authStyles.buttonPressed,
+                            (!isFormValid || loading) && authStyles.buttonDisabled
+                        ]}
                         onPress={handleResetPassword}
                         disabled={!isFormValid || loading}
                     >
@@ -98,8 +109,8 @@ const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: an
                         )}
                     </Pressable>
 
-                    <View style={{ marginTop: 14 }}>
-                        <Text>
+                    <View style={authStyles.bottomTextContainer}>
+                        <Text style={authStyles.bottomText}>
                             <Text style={authStyles.link} onPress={() => navigation.navigate('Login')}>Back to Login</Text>
                         </Text>
                     </View>
@@ -107,5 +118,5 @@ const ChangePasswordScreen = ({ route, navigation }: {route: any, navigation: an
             </KeyboardAvoidingView>
         </TouchableWithoutFeedback>
     );
-}
+};
 export default ChangePasswordScreen;

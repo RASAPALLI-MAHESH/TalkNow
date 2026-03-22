@@ -1,45 +1,12 @@
 const mongoose = require('mongoose');
 const Notification = require('../models/notification');
 const User = require('../models/user');
-
-const getActorUserId = (req) => {
-    const fromToken = req?.user?.id;
-    if (!fromToken) return '';
-
-    if (typeof fromToken === 'string') return fromToken.trim();
-
-    if (fromToken && typeof fromToken === 'object') {
-        const anyId = fromToken;
-        if (typeof anyId.$oid === 'string') return anyId.$oid.trim();
-        if (typeof anyId._id === 'string') return anyId._id.trim();
-        if (typeof anyId.id === 'string') return anyId.id.trim();
-
-        const bufferCandidate = anyId?.id ?? anyId;
-        const data = bufferCandidate?.data;
-        if (bufferCandidate && typeof bufferCandidate === 'object' && bufferCandidate.type === 'Buffer' && Array.isArray(data)) {
-            try {
-                return Buffer.from(data).toString('hex');
-            } catch {
-                // ignore
-            }
-        }
-
-        if (Array.isArray(anyId?.id) && anyId.id.every((n) => Number.isInteger(n))) {
-            try {
-                return Buffer.from(anyId.id).toString('hex');
-            } catch {
-                // ignore
-            }
-        }
-    }
-
-    return String(fromToken).trim();
-};
+const { getActorUserId, isValidObjectId } = require('./identityUtils');
 
 const getNotifications = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!isValidObjectId(userId)) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
@@ -58,7 +25,7 @@ const getNotifications = async (req, res) => {
                 notifications
                     .filter((n) => !n.fromUsername && n.fromUserId)
                     .map((n) => String(n.fromUserId))
-                    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+                    .filter((id) => isValidObjectId(id))
             )
         );
 
@@ -112,7 +79,7 @@ const getNotifications = async (req, res) => {
 const getUnreadCount = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!isValidObjectId(userId)) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
@@ -137,12 +104,12 @@ const getUnreadCount = async (req, res) => {
 const deleteNotification = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!isValidObjectId(userId)) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
         const id = String(req?.params?.id ?? '').trim();
-        if (!mongoose.Types.ObjectId.isValid(id)) {
+        if (!isValidObjectId(id)) {
             return res.status(400).json({ message: 'Invalid notification id' });
         }
 

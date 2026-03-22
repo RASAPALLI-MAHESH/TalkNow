@@ -2,76 +2,20 @@ const mongoose = require('mongoose');
 const User = require('../models/user');
 const Notification = require('../models/notification');
 const Connection = require('../models/connection');
-const { getIo, getUserRoom } = require('../services/notificationSocket');
+const { emitNotification } = require('../services/websocketServer');
+const { getActorUserId, isValidObjectId } = require('./identityUtils');
 
-// These handlers are meant to be mounted from backend/routes/authRoutes.js
-// with authMiddleware so req.user.id is available.
-
+// Helper to normalize the input which can be in various formats
 const getTargetUserIdFromBody = (body) => {
     const raw = body?.targetUserId ?? body?.TargetUserId ?? body?.userId ?? body?.UserId;
     return String(raw ?? '').trim();
 };
 
-const getActorUserId = (req) => {
-    // Prefer JWT identity.
-    const fromToken = req?.user?.id;
-    if (fromToken) {
-        if (typeof fromToken === 'string') return fromToken.trim();
-
-        // Handle cases where token payload might contain an ObjectId-like object.
-        if (fromToken && typeof fromToken === 'object') {
-            const anyId = fromToken;
-
-            if (typeof anyId.$oid === 'string') return anyId.$oid.trim();
-            if (typeof anyId._id === 'string') return anyId._id.trim();
-            if (typeof anyId.id === 'string') return anyId.id.trim();
-
-            // Common decoded ObjectId shapes:
-            // - { _bsontype: 'ObjectId', id: { type: 'Buffer', data: [...] } }
-            // - { id: { type: 'Buffer', data: [...] } }
-            // - { type: 'Buffer', data: [...] }
-            const bufferCandidate = anyId?.id ?? anyId;
-            const data = bufferCandidate?.data;
-            if (bufferCandidate && typeof bufferCandidate === 'object' && bufferCandidate.type === 'Buffer' && Array.isArray(data)) {
-                try {
-                    return Buffer.from(data).toString('hex');
-                } catch {
-                    // ignore
-                }
-            }
-
-            // If the id is a raw byte array.
-            if (Array.isArray(anyId?.id) && anyId.id.every((n) => Number.isInteger(n))) {
-                try {
-                    return Buffer.from(anyId.id).toString('hex');
-                } catch {
-                    // ignore
-                }
-            }
-        }
-
-        return String(fromToken).trim();
-    }
-    // Fallback (not recommended) if you ever call without authMiddleware.
-    const fromBody = req?.body?.userId;
-    return fromBody ? String(fromBody).trim() : '';
-};
-
 const validateIds = (actorUserId, targetUserId) => {
-    if (!actorUserId) return { ok: false, status: 401, message: 'Unauthorized' };
-    if (!mongoose.Types.ObjectId.isValid(String(actorUserId))) return { ok: false, status: 401, message: 'Unauthorized' };
-    if (!targetUserId) return { ok: false, status: 400, message: 'targetUserId is required' };
-    if (!mongoose.Types.ObjectId.isValid(targetUserId)) return { ok: false, status: 400, message: 'Invalid targetUserId' };
+    if (!actorUserId || !isValidObjectId(actorUserId)) return { ok: false, status: 401, message: 'Unauthorized' };
+    if (!targetUserId || !isValidObjectId(targetUserId)) return { ok: false, status: 400, message: 'Invalid targetUserId' };
     if (String(actorUserId) === String(targetUserId)) return { ok: false, status: 400, message: 'You cannot follow yourself' };
     return { ok: true };
-};
-
-const emitNotification = async (toUserId, payload) => {
-    const io = getIo();
-    if (!io) return;
-
-    const room = getUserRoom(toUserId);
-    io.to(room).emit('new_notification', payload);
 };
 
 const toSafeUsername = (value) => {
@@ -197,7 +141,6 @@ const followUser = async (req, res) => {
 
         const payload = {
             id: String(doc._id),
-            type: 'follow_request',
             username: toSafeUsername(actor?.username),
             profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
             message,
@@ -205,7 +148,8 @@ const followUser = async (req, res) => {
             createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
         };
 
-        await emitNotification(targetUserId, payload);
+        // Emit through primary WS server
+        emitNotification(targetUserId, payload);
 
         return res.status(200).json({
             message: 'Follow request sent',
@@ -224,7 +168,6 @@ const unfollowUser = async (req, res) => {
 
         const v = validateIds(userId, targetUserId);
         if (!v.ok) {
-            // Customize message for unfollow.
             const msg = v.message === 'You cannot follow yourself' ? 'You cannot unfollow yourself' : v.message;
             return res.status(v.status).json({ message: msg });
         }
@@ -276,7 +219,6 @@ const unfollowUser = async (req, res) => {
 
         const payload = {
             id: String(doc._id),
-            type: 'unfollow',
             username: toSafeUsername(actor?.username),
             profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
             message,
@@ -284,7 +226,7 @@ const unfollowUser = async (req, res) => {
             createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
         };
 
-        await emitNotification(targetUserId, payload);
+        emitNotification(targetUserId, payload);
 
         return res.status(200).json({ message: 'Connection removed' });
     } catch (err) {
@@ -296,7 +238,7 @@ const unfollowUser = async (req, res) => {
 const acceptFollowRequest = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!isValidObjectId(userId)) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
@@ -313,7 +255,7 @@ const acceptFollowRequest = async (req, res) => {
         try {
             await session.withTransaction(async () => {
                 if (notificationId) {
-                    if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+                    if (!isValidObjectId(notificationId)) {
                         throw Object.assign(new Error('Invalid notificationId'), { statusCode: 400 });
                     }
 
@@ -327,7 +269,7 @@ const acceptFollowRequest = async (req, res) => {
                         .lean();
 
                     if (!requestDoc?._id) {
-                        if (requesterUserId && mongoose.Types.ObjectId.isValid(requesterUserId)) {
+                        if (requesterUserId && isValidObjectId(requesterUserId)) {
                             const connected = await User.findOne({
                                 _id: userId,
                                 following: requesterUserId,
@@ -348,7 +290,7 @@ const acceptFollowRequest = async (req, res) => {
                     requesterUserId = String(requestDoc.fromUserId);
                 }
 
-                if (!requesterUserId || !mongoose.Types.ObjectId.isValid(requesterUserId)) {
+                if (!isValidObjectId(requesterUserId)) {
                     throw Object.assign(new Error('requesterUserId is required'), { statusCode: 400 });
                 }
                 if (String(requesterUserId) === String(userId)) {
@@ -448,7 +390,6 @@ const acceptFollowRequest = async (req, res) => {
 
         const payload = {
             id: String(doc._id),
-            type: 'follow_accept',
             username: toSafeUsername(currentUser?.username),
             profilePicture: currentUser?.profilePicture ? String(currentUser.profilePicture) : '',
             message: acceptedMessage,
@@ -456,7 +397,7 @@ const acceptFollowRequest = async (req, res) => {
             createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
         };
 
-        await emitNotification(requesterUserId, payload);
+        emitNotification(requesterUserId, payload);
 
         return res.status(200).json({
             message: 'Follow request accepted',
@@ -475,7 +416,7 @@ const acceptFollowRequest = async (req, res) => {
 const rejectFollowRequest = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!isValidObjectId(userId)) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
@@ -486,7 +427,7 @@ const rejectFollowRequest = async (req, res) => {
         try {
             await session.withTransaction(async () => {
                 if (notificationId) {
-                    if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+                    if (!isValidObjectId(notificationId)) {
                         throw Object.assign(new Error('Invalid notificationId'), { statusCode: 400 });
                     }
 
@@ -500,7 +441,7 @@ const rejectFollowRequest = async (req, res) => {
                     );
 
                     if (!result?.deletedCount) {
-                        if (requesterUserIdFromBody && mongoose.Types.ObjectId.isValid(requesterUserIdFromBody)) {
+                        if (requesterUserIdFromBody && isValidObjectId(requesterUserIdFromBody)) {
                             const connected = await User.findOne({
                                 _id: userId,
                                 following: requesterUserIdFromBody,
@@ -518,7 +459,7 @@ const rejectFollowRequest = async (req, res) => {
                         throw Object.assign(new Error('Follow request not found'), { statusCode: 404 });
                     }
 
-                    if (requesterUserIdFromBody && mongoose.Types.ObjectId.isValid(requesterUserIdFromBody)) {
+                    if (requesterUserIdFromBody && isValidObjectId(requesterUserIdFromBody)) {
                         const pair = normalizePair(userId, requesterUserIdFromBody);
                         await Connection.updateOne(
                             { pairKey: pair.pairKey },
@@ -535,7 +476,7 @@ const rejectFollowRequest = async (req, res) => {
                     return;
                 }
 
-                if (!requesterUserIdFromBody || !mongoose.Types.ObjectId.isValid(requesterUserIdFromBody)) {
+                if (!isValidObjectId(requesterUserIdFromBody)) {
                     throw Object.assign(new Error('requesterUserId is required'), { statusCode: 400 });
                 }
 
@@ -583,7 +524,7 @@ const rejectFollowRequest = async (req, res) => {
 const getMutualConnections = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) {
+        if (!isValidObjectId(userId)) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
@@ -613,7 +554,7 @@ const getMutualConnections = async (req, res) => {
                                         cond: { $ne: ["$$p.userId", me] }
                                     }
                                 },
-                                as: "peer",
+                                arm: "peer",
                                 in: "$$peer.userId"
                             }
                         }
@@ -662,3 +603,4 @@ module.exports = {
     rejectFollowRequest,
     getMutualConnections,
 };
+

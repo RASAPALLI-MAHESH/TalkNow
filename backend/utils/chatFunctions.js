@@ -2,20 +2,7 @@ const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Connection = require('../models/connection');
 const { emitToUser } = require('../services/websocketServer');
-
-const MONGO_OBJECT_ID_RE = /^[a-f\d]{24}$/i;
-
-const getActorUserId = (req) => {
-    const fromToken = req?.user?.id;
-    if (!fromToken) return '';
-    if (typeof fromToken === 'string') return fromToken.trim();
-    if (typeof fromToken === 'object') {
-        if (typeof fromToken.$oid === 'string') return fromToken.$oid.trim();
-        if (typeof fromToken._id === 'string') return fromToken._id.trim();
-        if (typeof fromToken.id === 'string') return fromToken.id.trim();
-    }
-    return String(fromToken).trim();
-};
+const { getActorUserId, isValidObjectId } = require('./identityUtils');
 
 const toSafeUsername = (value) => {
     const text = String(value ?? '').trim();
@@ -25,7 +12,7 @@ const toSafeUsername = (value) => {
 const normalizePair = (leftId, rightId) => {
     const a = String(leftId || '').trim();
     const b = String(rightId || '').trim();
-    if (!MONGO_OBJECT_ID_RE.test(a) || !MONGO_OBJECT_ID_RE.test(b)) return null;
+    if (!isValidObjectId(a) || !isValidObjectId(b)) return null;
     const ids = [a, b].sort();
     return {
         pairKey: `${ids[0]}:${ids[1]}`,
@@ -36,7 +23,7 @@ const normalizePair = (leftId, rightId) => {
 const getInbox = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!MONGO_OBJECT_ID_RE.test(userId)) return res.status(401).json({ message: 'Unauthorized' });
+        if (!isValidObjectId(userId)) return res.status(401).json({ message: 'Unauthorized' });
 
         const limitRaw = Number.parseInt(String(req.query?.limit ?? ''), 10);
         const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
@@ -129,8 +116,8 @@ const sendMessage = async (req, res) => {
         const toUserId = String(req.body?.toUserId ?? '').trim();
         const content = String(req.body?.content ?? '').trim();
 
-        if (!MONGO_OBJECT_ID_RE.test(fromUserId)) return res.status(401).json({ message: 'Unauthorized' });
-        if (!MONGO_OBJECT_ID_RE.test(toUserId)) return res.status(400).json({ message: 'Invalid toUserId' });
+        if (!isValidObjectId(fromUserId)) return res.status(401).json({ message: 'Unauthorized' });
+        if (!isValidObjectId(toUserId)) return res.status(400).json({ message: 'Invalid toUserId' });
         if (fromUserId === toUserId) return res.status(400).json({ message: 'Cannot message yourself' });
         if (!content) return res.status(400).json({ message: 'Message content is required' });
 
@@ -201,10 +188,10 @@ const sendMessage = async (req, res) => {
 const getConversationMessages = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!MONGO_OBJECT_ID_RE.test(userId)) return res.status(401).json({ message: 'Unauthorized' });
+        if (!isValidObjectId(userId)) return res.status(401).json({ message: 'Unauthorized' });
 
         const peerId = String(req.params?.peerId ?? '').trim();
-        if (!MONGO_OBJECT_ID_RE.test(peerId)) return res.status(400).json({ message: 'Invalid peerId' });
+        if (!isValidObjectId(peerId)) return res.status(400).json({ message: 'Invalid peerId' });
         if (peerId === userId) return res.status(400).json({ message: 'Invalid peerId' });
 
         const pair = normalizePair(userId, peerId);
@@ -250,7 +237,7 @@ const getConversationMessages = async (req, res) => {
 const getConnectionCounters = async (req, res) => {
     try {
         const userId = getActorUserId(req);
-        if (!MONGO_OBJECT_ID_RE.test(userId)) return res.status(401).json({ message: 'Unauthorized' });
+        if (!isValidObjectId(userId)) return res.status(401).json({ message: 'Unauthorized' });
 
         const me = new mongoose.Types.ObjectId(userId);
 
