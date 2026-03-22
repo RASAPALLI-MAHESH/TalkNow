@@ -61,6 +61,10 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
         await AuthService.resetPassword(email, otp, newPassword);
     };
 
+    const updateUser = (data: Partial<AuthUser>) => {
+        setUser(prev => prev ? { ...prev, ...data } : null);
+    };
+
     const value = useMemo(
         () => ({
             user,
@@ -72,6 +76,7 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
             signUp,
             forgotPassword,
             resetPassword,
+            updateUser,
         }),
         [user, loading]
     );

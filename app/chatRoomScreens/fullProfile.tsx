@@ -102,7 +102,7 @@ type FullProfileProps = {
 
 const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => {
     const insets = useSafeAreaInsets();
-    const { user: me, Logout } = useAuth();
+    const { user: me, Logout, updateUser } = useAuth();
 
     // If it's the settings tab, we are viewing our OWN profile.
     const peerId       = isSettingsTab ? String(me?.id ?? '') : String(route?.params?.peerId ?? '').trim();
@@ -162,6 +162,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
             const newData = route.params.updatedHeroData;
             setHeroData(newData);
             updateProfile({ heroData: newData }).catch(console.error);
+            updateUser({ heroData: newData });
             // Clear the param
             navigation.setParams({ updatedHeroData: undefined });
         }
@@ -217,6 +218,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                 const uri = result.assets[0].uri;
                 setLocalPeerAvatar(uri);
                 updateProfile({ profilePicture: uri }).catch(console.error);
+                updateUser({ profilePicture: uri });
             }
         } finally {
             setIsPickingAvatar(false);
@@ -227,10 +229,6 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         if (isSelf) {
             navigation.navigate('HeroCanvas', {
                 initialData: heroData || { text: '', themeId: 't1' },
-                onSave: (newData: HeroData) => {
-                    setHeroData(newData);
-                    updateProfile({ heroData: newData }).catch(console.error);
-                }
             });
         }
     };
@@ -262,8 +260,14 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         setSocialDialogVisible(false);
     };
 
-    const handleBlurName = () => updateProfile({ Firstname: editName }).catch(console.error);
-    const handleBlurBio = () => updateProfile({ bio: editBio }).catch(console.error);
+    const handleBlurName = () => {
+        updateProfile({ Firstname: editName }).catch(console.error);
+        updateUser({ Firstname: editName });
+    };
+    const handleBlurBio = () => {
+        updateProfile({ bio: editBio }).catch(console.error);
+        updateUser({ bio: editBio });
+    };
 
 
     return (

@@ -96,17 +96,12 @@ const HeroCanvas = ({ navigation, route }: any) => {
             themeId: selectedThemeId,
             customImageUri,
         };
-        if (route.params?.onSave) {
-            route.params.onSave(newData);
-            navigation.goBack();
-        } else {
-            // Fallback: forcefully pass to FullProfile if callback stripped
-            navigation.navigate({
-                name: 'FullProfile',
-                params: { updatedHeroData: newData },
-                merge: true
-            });
-        }
+        // Pass data back using React Navigation merge params
+        navigation.navigate({
+            name: 'FullProfile',
+            params: { updatedHeroData: newData },
+            merge: true
+        });
     };
 
     const textColor = customImageUri ? '#ffffff' : activeTheme.textColor;

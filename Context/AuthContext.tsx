@@ -17,6 +17,7 @@ interface AuthContextType {
     Logout: () => Promise<void>;
     forgotPassword: (email: string) => Promise<void>;
     resetPassword: (email: string, otp: string, newPassword: string) => Promise<void>;
+    updateUser: (data: Partial<AuthUser>) => void;
 }
 
 export const AuthContext = createContext<AuthContextType | null>(null);
