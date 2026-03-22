@@ -126,7 +126,7 @@ export const styles = StyleSheet.create({
     messagesContent: {
         paddingHorizontal: 16,
         paddingTop: 16,
-        paddingBottom: 0, // 🔥 FIXED (was 8)
+        paddingBottom: 16,
         flexGrow: 1,
         justifyContent: 'flex-end',
     },

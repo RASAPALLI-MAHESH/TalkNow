@@ -286,6 +286,12 @@ const attachWebSocketServer = (httpServer) => {
                         readAt: readAt.toISOString(),
                         by: readerId,
                     });
+                    
+                    // Tell the reader to update their own notification badging
+                    emitToUser(readerId, {
+                        type: 'badge_update',
+                        connectionId: String(pair.pairKey),
+                    });
                     return;
                 }
 
