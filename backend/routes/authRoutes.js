@@ -32,6 +32,8 @@ router.post("/reset-password", authController.resetPassword);
 // Protected routes
 router.post("/logout", authMiddleware, authController.logout);
 router.get("/profile", authMiddleware, authController.userProfile);
+router.get("/profile/:userId", authMiddleware, authController.getUserProfile);
+router.put("/updateProfile", authMiddleware, authController.updateProfile);
 
 // follow  routes 
 router.post("/follow", authMiddleware, followUser);

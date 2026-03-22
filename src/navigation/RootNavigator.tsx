@@ -1,3 +1,6 @@
+import ChatProfile from '@/app/chatRoomScreens/chatprofile';
+import FullProfile from '@/app/chatRoomScreens/fullProfile';
+import HeroCanvas from '@/app/chatRoomScreens/HeroCanvas';
 import Chatroom from '@/app/components/chatroom';
 import Notifications from '@/app/components/notifications';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -15,30 +18,33 @@ const MainNavigator = () => {
             <Stack.Screen
                 name="Chatroom"
                 component={Chatroom}
-                // options={{
-                //     gestureEnabled: true,
-                //     gestureDirection: 'horizontal',
-                //     cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
-                //     cardStyle: { backgroundColor: '#fff' },
-                //     transitionSpec: {
-                //         open: {
-                //             animation: 'timing',
-                //             config: {
-                //                 duration: 100,
-                //                 easing: Easing.out(Easing.poly(4)),
-                //             },
-                //         },
-                //         close: {
-                //             animation: 'timing',
-                //             config: {
-                //                 duration: 100,
-                //                 easing: Easing.out(Easing.poly(4)),
-                //             },
-                //         },
-                //     },
-                // }}
+            // options={{
+            //     gestureEnabled: true,
+            //     gestureDirection: 'horizontal',
+            //     cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
+            //     cardStyle: { backgroundColor: '#fff' },
+            //     transitionSpec: {
+            //         open: {
+            //             animation: 'timing',
+            //             config: {
+            //                 duration: 100,
+            //                 easing: Easing.out(Easing.poly(4)),
+            //             },
+            //         },
+            //         close: {
+            //             animation: 'timing',
+            //             config: {
+            //                 duration: 100,
+            //                 easing: Easing.out(Easing.poly(4)),
+            //             },
+            //         },
+            //     },
+            // }}
             />
             <Stack.Screen name="Notifications" component={Notifications} />
+            <Stack.Screen name="ChatProfile" component={ChatProfile} />
+            <Stack.Screen name="FullProfile" component={FullProfile} />
+            <Stack.Screen name="HeroCanvas" component={HeroCanvas} />
         </Stack.Navigator>
     );
 };

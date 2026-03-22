@@ -135,15 +135,16 @@ const MessageBubble = memo<MessageBubbleProps>(
         const isMe = sender === 'me';
 
         return (
-            <View
-                style={[
-                    styles.bubbleRow,
-                    isMe ? styles.bubbleRowMe : styles.bubbleRowOther,
-                    containerStyle,
-                ]}
-                accessibilityRole="text"
-                accessibilityLabel={`Message from ${isMe ? 'you' : senderName || 'contact'}: ${text}`}
-            >
+            <View style={styles.bubbleRowContainer}>
+                <View
+                    style={[
+                        styles.bubbleRow,
+                        isMe ? styles.bubbleRowMe : styles.bubbleRowOther,
+                        containerStyle,
+                    ]}
+                    accessibilityRole="text"
+                    accessibilityLabel={`Message from ${isMe ? 'you' : senderName || 'contact'}: ${text}`}
+                >
                 {/* Sender name for group chats (future feature) */}
                 {senderName && !isMe && (
                     <Text style={styles.senderName} numberOfLines={1}>
@@ -190,6 +191,7 @@ const MessageBubble = memo<MessageBubbleProps>(
                         </Text>
                     )}
                 </View>
+                </View>
             </View>
         );
     }
@@ -201,6 +203,10 @@ MessageBubble.displayName = 'MessageBubble';
 
 const styles = StyleSheet.create({
     /* Layout */
+    bubbleRowContainer: {
+        width: '100%',
+        flexDirection: 'column',
+    },
     bubbleRow: {
         marginBottom: 8,
         maxWidth: '85%',

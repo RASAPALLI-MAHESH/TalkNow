@@ -239,6 +239,16 @@ export const getCurrentUser = async (): Promise<AuthUser | null> => {
     }
 };
 
+export const getUserProfile = async (userId: string): Promise<any> => {
+    const response = await client.get(`/profile/${encodeURIComponent(userId)}`);
+    return response.data;
+};
+
+export const updateProfile = async (data: any): Promise<any> => {
+    const response = await client.put('/updateProfile', data);
+    return response.data;
+};
+
 export const logout = async (): Promise<void> => {
     await clearToken();
     try {
@@ -395,6 +405,8 @@ const AuthService = {
     getUnreadNotificationCount,
     getUnreadMessageCount,
     deleteNotification,
+    getUserProfile,
+    updateProfile,
 };
 
 export default AuthService;

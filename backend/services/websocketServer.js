@@ -256,16 +256,14 @@ const attachWebSocketServer = (httpServer) => {
                         .select('_id')
                         .lean();
 
-                    if (unread.length === 0) {
-                        return;
-                    }
-
                     const ids = unread.map((m) => m._id);
 
-                    await Message.updateMany(
-                        { _id: { $in: ids }, readAt: null },
-                        { $set: { readAt, deliveredAt: readAt } }
-                    );
+                    if (ids.length > 0) {
+                        await Message.updateMany(
+                            { _id: { $in: ids }, readAt: null },
+                            { $set: { readAt, deliveredAt: readAt } }
+                        );
+                    }
 
                     await Connection.updateOne(
                         { pairKey: pair.pairKey },

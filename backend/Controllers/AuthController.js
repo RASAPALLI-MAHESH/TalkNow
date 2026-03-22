@@ -293,11 +293,95 @@ exports.userProfile = async (req, res) => {
         res.status(200).json({
             id: existingUser._id,
             username: existingUser.username,
+            Firstname: existingUser.Firstname,
             email: existingUser.email,
-            profilePicture: existingUser.profilePicture
+            profilePicture: existingUser.profilePicture,
+            bio: existingUser.bio,
+            heroData: existingUser.heroData,
+            socialUrls: existingUser.socialUrls,
+            customLinks: existingUser.customLinks,
+            followers: existingUser.followers ? existingUser.followers.length : 0,
+            following: existingUser.following ? existingUser.following.length : 0
         });
     } catch(err) {
          res.status(500).json({message: "Server error", error: err.message});
+    }
+}
+
+exports.getUserProfile = async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        const existingUser = await User.findById(userId);
+        if(!existingUser){
+            return res.status(404).json({message: "User not found"});
+        }
+        // Exclude email for public requests if we want, but for simplicity returning same payload
+        res.status(200).json({
+            id: existingUser._id,
+            username: existingUser.username,
+            Firstname: existingUser.Firstname,
+            profilePicture: existingUser.profilePicture,
+            bio: existingUser.bio,
+            heroData: existingUser.heroData,
+            socialUrls: existingUser.socialUrls,
+            customLinks: existingUser.customLinks,
+            followers: existingUser.followers ? existingUser.followers.length : 0,
+            following: existingUser.following ? existingUser.following.length : 0
+        });
+    } catch(err) {
+         res.status(500).json({message: "Server error", error: err.message});
+    }
+}
+
+exports.updateProfile = async (req, res) => {
+    try {
+        if (!req.user || !req.user.id) {
+            return res.status(401).json({ message: "Unauthorized" });
+        }
+        const userId = req.user.id;
+        const updates = {};
+        
+        // Allowed fields to update
+        if (req.body.Firstname !== undefined) updates.Firstname = normalizeFirstname(req.body.Firstname);
+        if (req.body.profilePicture !== undefined) updates.profilePicture = req.body.profilePicture;
+        if (req.body.bio !== undefined) updates.bio = String(req.body.bio).trim();
+        
+        if (req.body.heroData !== undefined) {
+            updates.heroData = req.body.heroData; // { text, themeId, customImageUri }
+        }
+        if (req.body.socialUrls !== undefined) {
+            updates.socialUrls = req.body.socialUrls; // { whatsapp, instagram, linkedin, twitter }
+        }
+        if (req.body.customLinks !== undefined) {
+            updates.customLinks = req.body.customLinks; // array of objects
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: updates },
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedUser) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        return res.status(200).json({
+            message: "Profile updated successfully",
+            user: {
+                id: updatedUser._id,
+                username: updatedUser.username,
+                Firstname: updatedUser.Firstname,
+                email: updatedUser.email,
+                profilePicture: updatedUser.profilePicture,
+                bio: updatedUser.bio,
+                heroData: updatedUser.heroData,
+                socialUrls: updatedUser.socialUrls,
+                customLinks: updatedUser.customLinks
+            }
+        });
+    } catch (err) {
+        return res.status(500).json({ message: "Server error", error: err.message });
     }
 }
 

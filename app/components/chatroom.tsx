@@ -14,12 +14,14 @@
  */
 
 import AvatarPicker from '@/app/components/AvatarPicker';
+import RippleButton from '@/app/components/RippleButton';
 import MessageBubble from '@/app/components/messageComponent';
+import { useUnread } from '@/Context/UnreadContext';
 import useAuth from '@/hooks/useAuth';
 import { getConversationMessages } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
-import { useUnread } from '@/Context/UnreadContext';
 import { Ionicons } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
 import React, {
     useCallback,
     useEffect,
@@ -108,6 +110,11 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
             messages: nextMessages,
             fetchedAt: Date.now(),
         });
+
+        try {
+            const toSave = nextMessages.slice(0, 30);
+            SecureStore.setItemAsync(`chat_cache_${id}`, JSON.stringify(toSave)).catch(() => { });
+        } catch (e) { }
     }, []);
 
     useEffect(() => {
@@ -128,8 +135,17 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 } else {
                     setOldestMessageDate(null);
                     setHasMoreMessages(true);
+
+                    SecureStore.getItemAsync(`chat_cache_${peerId}`).then(offlineCached => {
+                        if (offlineCached && mounted) {
+                            try {
+                                const parsed = JSON.parse(offlineCached);
+                                setMessages(prev => prev.length === 0 ? parsed : prev);
+                            } catch (e) { }
+                        }
+                    }).catch(() => { });
                 }
-                
+
                 const res = await getConversationMessages(peerId, undefined);
                 if (!mounted) return;
 
@@ -144,10 +160,10 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                             ? m.status
                             : undefined,
                 }));
-                
+
                 setMessages(normalized);
                 writeConversationCache(peerId, normalized);
-                
+
                 // Track oldest message for pagination
                 if (normalized.length > 0) {
                     const oldestMsg = normalized[0];
@@ -267,9 +283,12 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
     useEffect(() => {
         if (!peerId || messages.length === 0) return;
-        const latest = messages[messages.length - 1];
-        if (!latest || latest.sender !== 'other') return;
-        markRead(peerId, latest.createdAt);
+
+        // Find the newest message from 'other' (messages[0] is newest in inverted list)
+        const latestOther = messages.find(m => m.sender === 'other');
+        if (!latestOther) return;
+
+        markRead(peerId, latestOther.createdAt);
 
         // Allow backend to process the markRead before fetching the new count
         const timer = setTimeout(() => {
@@ -305,7 +324,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
     /* Header elements animation */
     const headerScale = useRef(new Animated.Value(1)).current;
-    
+
     const animatedBorderColor = borderAnim.interpolate({
         inputRange: [0, 1],
         outputRange: ['rgba(103,51,208,0.18)', 'rgba(103,51,208,0.85)'],
@@ -323,38 +342,38 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     /* Load older messages when user scrolls to top */
     const handleLoadMore = useCallback(async () => {
         if (loadingMore || !hasMoreMessages || !oldestMessageDate || !peerId) return;
-        
+
         setLoadingMore(true);
         try {
             const res = await getConversationMessages(peerId, oldestMessageDate);
             const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-            
+
             if (incoming.length === 0) {
                 setHasMoreMessages(false);
                 return;
             }
-            
+
             const normalized: ChatMessage[] = incoming.map((m: any) => ({
                 id: String(m?.id ?? Date.now()),
                 text: String(m?.text ?? ''),
                 sender: m?.sender === 'me' ? 'me' : 'other',
                 createdAt: String(m?.createdAt ?? new Date().toISOString()),
             }));
-            
+
             setMessages((prev) => {
                 const next = [...prev, ...normalized];
                 writeConversationCache(peerId, next);
                 return next;
             });
-            
+
             if (normalized.length > 0) {
                 setOldestMessageDate(normalized[0].createdAt);
             }
-            
+
             if (normalized.length < 50) {
                 setHasMoreMessages(false);
             }
-            
+
 
         } catch (err: any) {
             console.log('load more error:', err?.message ?? String(err));
@@ -426,23 +445,25 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     /* ── Shared Header ── */
     const Header = (
         <View style={styles.header}>
-            <Pressable
+            {/* Back button — ripple from touch point */}
+            <RippleButton
                 onPress={handleBack}
                 hitSlop={12}
-                style={({ pressed }) => [styles.headerIcon, pressed && styles.pressed]}
-                android_ripple={{ color: 'rgba(103,51,208,0.18)', borderless: true }}
-                accessibilityRole="button"
+                borderless
+                style={styles.headerIcon}
+                rippleColor="rgba(103,51,208,0.22)"
                 accessibilityLabel="Go back"
             >
                 <Ionicons name="arrow-back" size={22} color="#1a1a2e" />
-            </Pressable>
+            </RippleButton>
 
-            <Pressable
-                onPress={() => {}}
+            {/* Avatar — ripple, opens image preview */}
+            <RippleButton
+                onPress={() => navigation.navigate('ChatProfile', { peerId, peerUsername, peerAvatar })}
                 hitSlop={8}
-                style={({ pressed }) => [styles.avatarBtn, pressed && styles.pressed]}
-                android_ripple={{ color: 'rgba(103,51,208,0.18)', borderless: true }}
-                accessibilityRole="button"
+                borderless
+                style={styles.avatarBtn}
+                rippleColor="rgba(103,51,208,0.22)"
                 accessibilityLabel="Open profile"
             >
                 <AvatarPicker
@@ -454,36 +475,33 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                     textStyle={styles.avatarFallbackText}
                     previewEnabled
                 />
-                {/* Online dot */}
-                {/* <View style={styles.onlineDot} /> */}
-            </Pressable>
+            </RippleButton>
 
-            <Pressable
-                onPress={() => {}}
-                style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
+            {/* Name / status — ripple, opens ChatProfile */}
+            <RippleButton
+                onPress={() => navigation.navigate('ChatProfile', { peerId, peerUsername, peerAvatar })}
                 hitSlop={8}
-                android_ripple={{ color: 'rgba(103,51,208,0.12)', borderless: false }}
-                accessibilityRole="button"
+                style={styles.headerTitleWrap}
+                rippleColor="rgba(103,51,208,0.12)"
                 accessibilityLabel="Open chat details"
             >
                 <Text style={styles.headerTitle} numberOfLines={1}>
                     {peerUsername}
                 </Text>
                 <Text style={styles.headerSubtitle}>Online</Text>
-            </Pressable>
+            </RippleButton>
 
-
-
-            <Pressable
-                onPress={() => {}}
+            {/* More options — ripple */}
+            <RippleButton
+                onPress={() => { }}
                 hitSlop={12}
-                style={({ pressed }) => [styles.headerIcon, pressed && styles.pressed]}
-                android_ripple={{ color: 'rgba(103,51,208,0.18)', borderless: true }}
-                accessibilityRole="button"
+                borderless
+                style={styles.headerIcon}
+                rippleColor="rgba(103,51,208,0.22)"
                 accessibilityLabel="More options"
             >
                 <Ionicons name="ellipsis-vertical" size={20} color="#1a1a2e" />
-            </Pressable>
+            </RippleButton>
         </View>
     );
 
@@ -499,22 +517,22 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 <Animated.View style={[styles.inputBar, { borderColor: animatedBorderColor }]}>
 
 
-                <TextInput
-                    placeholder="Message…"
-                    style={styles.input}
-                    value={draft}
-                    onChangeText={setDraft}
-                    multiline
-                    maxLength={4000}
-                    placeholderTextColor="rgba(103,51,208,0.4)"
-                    returnKeyType="default"
-                    textAlignVertical="center"
-                    onFocus={() => setIsFocused(true)}
-                    onBlur={() => setIsFocused(false)}
-                />
+                    <TextInput
+                        placeholder="Message…"
+                        style={styles.input}
+                        value={draft}
+                        onChangeText={setDraft}
+                        multiline
+                        maxLength={4000}
+                        placeholderTextColor="rgba(103,51,208,0.4)"
+                        returnKeyType="default"
+                        textAlignVertical="center"
+                        onFocus={() => setIsFocused(true)}
+                        onBlur={() => setIsFocused(false)}
+                    />
 
-                {/* Emoji icon */}
-                {/* <Pressable
+                    {/* Emoji icon */}
+                    {/* <Pressable
                     onPress={() => {}}
                     hitSlop={8}
                     style={({ pressed }) => [styles.emojiBtn, pressed && styles.pressed]}
@@ -524,18 +542,18 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                     <Ionicons name="happy-outline" size={22} color="#9b7bde" />
                 </Pressable> */}
 
-                {/* Send button */}
-                <Pressable
-                    onPress={handleSend}
-                    disabled={!canSend}
-                    style={[styles.sendBtn, { opacity: canSend ? 1 : 0.35 }]}
-                    android_ripple={{ color: 'rgba(255,255,255,0.3)', borderless: false }}
-                    hitSlop={6}
-                    accessibilityRole="button"
-                    accessibilityLabel="Send message"
-                >
-                    <Ionicons name="send" size={18} color="#fff" />
-                </Pressable>
+                    {/* Send button */}
+                    <Pressable
+                        onPress={handleSend}
+                        disabled={!canSend}
+                        style={[styles.sendBtn, { opacity: canSend ? 1 : 0.35 }]}
+                        android_ripple={{ color: 'rgba(255,255,255,0.3)', borderless: false }}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel="Send message"
+                    >
+                        <Ionicons name="send" size={18} color="#fff" />
+                    </Pressable>
                 </Animated.View>
             </View>
         </View>

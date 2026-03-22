@@ -36,6 +36,27 @@ const userSchema = new mongoose.Schema(
             default: null
         },
 
+        // Profile fields
+        bio: { type: String, default: "" },
+        heroData: {
+            text: { type: String, default: "" },
+            themeId: { type: String, default: "t1" },
+            customImageUri: { type: String, default: "" }
+        },
+        socialUrls: {
+            whatsapp: { type: String, default: "" },
+            instagram: { type: String, default: "" },
+            linkedin: { type: String, default: "" },
+            twitter: { type: String, default: "" }
+        },
+        customLinks: [
+            {
+                id: { type: String },
+                label: { type: String },
+                url: { type: String }
+            }
+        ],
+
         // Social graph (minimal v1): store relationships as user ids.
         following: [
             {

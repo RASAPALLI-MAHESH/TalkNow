@@ -1,5 +1,6 @@
 import AvatarPicker from '@/app/components/AvatarPicker';
 import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
+import RippleButton from '@/app/components/RippleButton';
 import useAuth from '@/hooks/useAuth';
 import {
     followUser,
@@ -25,6 +26,7 @@ import {
     StyleSheet,
     Text,
     TextInput,
+    TouchableNativeFeedback,
     TouchableWithoutFeedback,
     View,
     type GestureResponderEvent,
@@ -38,6 +40,7 @@ const MODE_TOGGLE_PADDING = 2;
 const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
 
 const NOTIFICATIONS_LAST_SEEN_KEY = 'notificationsLastSeenAt';
+const CHATS_CACHE_KEY = 'offline_chats_inbox_v1';
 
 const CHAT_HEADER_ICON_XML = `
 <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#6733d0">
@@ -215,10 +218,16 @@ const ChatRow = ({
         ]).start();
     };
 
-    return (
+    // On Android we use TouchableNativeFeedback for exact-point ripple;
+    // we still keep the custom ink overlay for long-press on both platforms.
+    const rippleBackground = Platform.OS === 'android'
+        ? TouchableNativeFeedback.Ripple('rgba(103,51,208,0.18)', false)
+        : undefined;
+
+    const rowBody = (
         <Pressable
             onLayout={onLayout}
-            style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+            style={({ pressed }) => [styles.row, pressed && Platform.OS === 'ios' && styles.rowPressed]}
             delayLongPress={240}
             onPressIn={(e) => {
                 primeInk(e);
@@ -316,6 +325,59 @@ const ChatRow = ({
             </View>
         </Pressable>
     );
+
+    // On Android: wrap with TNF so the ripple originates exactly from the touch point
+    if (Platform.OS === 'android') {
+        return (
+            <TouchableNativeFeedback
+                onPress={() => {
+                    if (longPressFiredRef.current) { longPressFiredRef.current = false; return; }
+                    onPress();
+                }}
+                onLongPress={() => {
+                    longPressFiredRef.current = true;
+                    startLongPressInk();
+                }}
+                onPressIn={(e: any) => primeInk(e)}
+                onPressOut={() => {
+                    longPressFiredRef.current = false;
+                    Animated.timing(inkOpacity, { toValue: 0, duration: 140, useNativeDriver: true }).start();
+                }}
+                background={TouchableNativeFeedback.Ripple('rgba(103,51,208,0.20)', false)}
+                useForeground
+                delayLongPress={240}
+                accessibilityRole="button"
+            >
+                <View onLayout={onLayout} style={styles.row}>
+                    <AvatarPicker
+                        uri={item.profilePicture}
+                        name={item.name}
+                        size={48}
+                        style={styles.avatarImage}
+                        fallbackStyle={styles.avatar}
+                        textStyle={styles.avatarText}
+                        previewEnabled={false}
+                    />
+                    <View style={styles.rowContent}>
+                        <View style={styles.rowTop}>
+                            <Text style={[styles.name, (item.unreadCount ?? 0) > 0 && styles.nameUnread]} numberOfLines={1}>{item.name}</Text>
+                            <Text style={[styles.time, (item.unreadCount ?? 0) > 0 && styles.timeUnread]} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
+                        </View>
+                        <View style={styles.rowBottom}>
+                            <Text style={[styles.lastMessage, (item.unreadCount ?? 0) > 0 && styles.lastMessageUnread]} numberOfLines={1}>{item.lastMessage}</Text>
+                            {(item.unreadCount ?? 0) > 0 && (
+                                <View style={styles.unreadBadge}>
+                                    <Text style={styles.unreadBadgeText}>{(item.unreadCount ?? 0) > 99 ? '99+' : item.unreadCount}</Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+                </View>
+            </TouchableNativeFeedback>
+        );
+    }
+
+    return rowBody;
 };
 
 const GlobalChatRow = ({
@@ -428,6 +490,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 unreadCount: typeof u.unreadCount === 'number' ? u.unreadCount : 0,
             }));
 
+            try {
+                if (currentUserId) {
+                    await SecureStore.setItemAsync(`${CHATS_CACHE_KEY}_${currentUserId}`, JSON.stringify(incoming));
+                }
+            } catch (e) {}
+
             setChatRows((prev) => mergeChatsById(incoming, prev));
         } catch (err: any) {
             console.log('chat inbox hydrate error:', err?.message ?? String(err));
@@ -450,6 +518,19 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             // If endpoint fails, don't show a false dot.
             setHasUnreadNotifications(false);
         }
+    }, [currentUserId]);
+
+    useEffect(() => {
+        if (!currentUserId) return;
+        SecureStore.getItemAsync(`${CHATS_CACHE_KEY}_${currentUserId}`).then(cached => {
+            if (cached) {
+                try {
+                    const parsed = JSON.parse(cached);
+                    // Fast hydrate if currently empty
+                    setChatRows(prev => prev.length === 0 ? parsed : prev);
+                } catch (e) {}
+            }
+        }).catch(() => {});
     }, [currentUserId]);
 
     useEffect(() => {
@@ -487,6 +568,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
     useEffect(() => {
         const type = String((lastMessage as any)?.type ?? '');
+        if (type === 'badge_update') {
+            refreshUnreadCount();
+            void loadChatsFromInbox();
+            return;
+        }
+
         if (type !== 'new_message' && type !== 'sent') return;
         
         if (type === 'new_message') refreshUnreadCount();
@@ -503,13 +590,16 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
         const isIncoming = type === 'new_message';
 
+        const senderName = String((lastMessage as any)?.senderName ?? '');
+        const senderAvatar = String((lastMessage as any)?.senderAvatar ?? '');
+
         setChatRows((prev) => {
             const idx = prev.findIndex((row) => String(row.id) === peerId);
             if (idx === -1) {
                 const created: ChatListItem = {
                     id: peerId,
-                    name: 'User',
-                    profilePicture: '',
+                    name: senderName || 'User',
+                    profilePicture: senderAvatar || '',
                     lastMessage: content || 'New message',
                     Date: date,
                     unreadCount: isIncoming ? 1 : 0,
@@ -778,25 +868,22 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     <SvgXml xml={CHAT_HEADER_ICON_XML} width={22} height={22} />
                     <Text style={styles.headerTitle}>TalkNow</Text>
                 </View>
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.notification,
-                        pressed && styles.notificationPressed,
-                    ]}
+                <RippleButton
                     onPress={() => {
                         setHasUnreadNotifications(false);
                         navigation.navigate('Notifications');
                     }}
                     hitSlop={10}
-                    android_ripple={Platform.OS === 'android' ? { color: 'rgba(103,51,208,0.18)' } : undefined}
-                    accessibilityRole="button"
+                    borderless
+                    style={styles.notification}
+                    rippleColor="rgba(103,51,208,0.22)"
                     accessibilityLabel="Notifications"
                 >
                     <View style={styles.notificationIconWrap}>
                         <Ionicons name="notifications" size={22} color="#1a1073" />
                         {hasUnreadNotifications && <View style={styles.notificationDot} />}
                     </View>
-                </Pressable>
+                </RippleButton>
             </View>
 
             <View style={[styles.searchWrap, { paddingHorizontal: horizontalSafePad }]}>
