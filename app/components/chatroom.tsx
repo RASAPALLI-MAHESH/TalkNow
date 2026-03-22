@@ -112,7 +112,6 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
     useEffect(() => {
         let mounted = true;
-        shouldAutoScroll.current = true;
 
         const hydrateConversation = async () => {
             if (!peerId) return;
@@ -256,7 +255,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 createdAt: date,
                 status: from === currentUserId ? 'sent' : undefined,
             };
-            const next = [...prev, appended];
+            const next = [appended, ...prev];
             writeConversationCache(peerId, next);
             return next;
         });
@@ -319,16 +318,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         ]).start();
     }, []);
 
-    /* Scroll to end on initial load or new messages */
-    const shouldAutoScroll = useRef(true);
-    useEffect(() => {
-        if (shouldAutoScroll.current && messages.length > 0) {
-            const timer = setTimeout(() => {
-                listRef.current?.scrollToEnd({ animated: false });
-            }, 50);
-            return () => clearTimeout(timer);
-        }
-    }, [messages.length]);
+    /* Scroll is automatically handled by inverted={true} */
 
     /* Load older messages when user scrolls to top */
     const handleLoadMore = useCallback(async () => {
@@ -352,7 +342,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
             }));
             
             setMessages((prev) => {
-                const next = [...normalized, ...prev];
+                const next = [...prev, ...normalized];
                 writeConversationCache(peerId, next);
                 return next;
             });
@@ -365,7 +355,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 setHasMoreMessages(false);
             }
             
-            shouldAutoScroll.current = false;
+
         } catch (err: any) {
             console.log('load more error:', err?.message ?? String(err));
         } finally {
@@ -392,7 +382,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 createdAt: new Date().toISOString(),
                 status: 'sending',
             };
-            const next = [...prev, optimistic];
+            const next = [optimistic, ...prev];
             writeConversationCache(peerId, next);
             return next;
         });
@@ -562,7 +552,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 renderItem={renderItem}
                 contentContainerStyle={styles.messagesContent}
                 keyboardShouldPersistTaps="always"
-                keyboardDismissMode="none"
+                keyboardDismissMode="interactive"
                 scrollEnabled={true}
                 nestedScrollEnabled={true}
                 showsVerticalScrollIndicator={false}
@@ -571,8 +561,9 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 maxToRenderPerBatch={10}
                 windowSize={15}
                 updateCellsBatchingPeriod={30}
-                onStartReached={handleLoadMore}
-                onStartReachedThreshold={0.5}
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.5}
+                inverted={true}
             />
 
             {Composer}

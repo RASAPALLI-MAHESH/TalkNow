@@ -213,7 +213,6 @@ const getConversationMessages = async (req, res) => {
             .lean();
 
         const messages = docs
-            .reverse()
             .map((m) => ({
                 id: String(m._id),
                 text: String(m.content ?? ''),

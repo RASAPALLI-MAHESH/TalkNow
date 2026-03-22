@@ -145,6 +145,7 @@ const attachWebSocketServer = (httpServer) => {
                     }
 
                     const doc = await Message.create({
+                        conversationId: acceptedConnection._id,
                         conversationKey: pair.pairKey,
                         participants: pair.participantObjectIds,
                         senderId: new mongoose.Types.ObjectId(from),
