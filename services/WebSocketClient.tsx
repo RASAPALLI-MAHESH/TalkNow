@@ -1,30 +1,13 @@
 import useAuth from '@/hooks/useAuth';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { WS_URL } from './config';
 
 type WsIncomingMessage = {
     type: string;
     [key: string]: unknown;
 };
 
-const deriveWsUrl = () => {
-    const explicit = process.env.EXPO_PUBLIC_WS_URL;
-    if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
-
-    const api = process.env.EXPO_PUBLIC_API_URL;
-    const base = typeof api === 'string' && api.trim() ? api.trim() : '';
-
-    // Normalize to the server origin.
-    const withoutAuth = base.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
-    const origin = withoutAuth.replace(/\/$/, '');
-
-    const wsOrigin = origin.startsWith('https://')
-        ? origin.replace(/^https:\/\//i, 'wss://')
-        : origin.startsWith('http://')
-            ? origin.replace(/^http:\/\//i, 'ws://')
-            : origin;
-
-    return `${wsOrigin}/ws`;
-};
+// deriveWsUrl is now handled in config.ts via WS_URL
 
 export const useWebSocketClient = () => {
     const { user } = useAuth();
@@ -32,7 +15,7 @@ export const useWebSocketClient = () => {
     const [connected, setConnected] = useState(false);
     const [lastMessage, setLastMessage] = useState<WsIncomingMessage | null>(null);
 
-    const wsUrl = useMemo(() => deriveWsUrl(), []);
+    const wsUrl = WS_URL;
 
     useEffect(() => {
         const userId = user?.id;

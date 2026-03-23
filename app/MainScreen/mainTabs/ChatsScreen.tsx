@@ -12,6 +12,7 @@ import {
 } from '@/services/AuthService';
 import { useWebSocketClient } from '@/services/WebSocketClient';
 import { useUnread } from '@/Context/UnreadContext';
+import { API_ORIGIN } from '@/services/config';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
@@ -117,33 +118,7 @@ const mergeChatsById = (incoming: ChatListItem[], existing: ChatListItem[]) => {
     return merged;
 };
 
-const inferDevServerBaseUrl = (): string | null => {
-    const hostUri = (Constants as any)?.expoConfig?.hostUri as string | undefined;
-    if (!hostUri || typeof hostUri !== 'string') return null;
-
-    const host = hostUri.split(':')[0]?.trim();
-    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
-
-    return `http://${host}:8080`;
-};
-
-
-const getDefaultApiUrl = (): string => {
-    const envUrl = process.env.EXPO_PUBLIC_API_URL;
-    if (typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
-
-    const inferred = inferDevServerBaseUrl();
-    if (inferred) return inferred;
-
-    if (Platform.OS === 'android') return 'http://10.0.2.2:8080';
-    return 'http://localhost:8080';
-};
-
-const normalizeApiOrigin = (rawUrl: string) => {
-    const trimmed = rawUrl.trim().replace(/\/$/, '');
-    const withoutAuth = trimmed.replace(/\/?api\/?auth\/?$/i, '').replace(/\/?api\/?$/i, '');
-    return withoutAuth.replace(/\/$/, '');
-};
+// getDefaultApiUrl and normalizeApiOrigin are now handled in config.ts via API_ORIGIN
 
 type ChatRowAction = {
     label: string;
@@ -469,7 +444,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const spinAnim = useRef(new Animated.Value(0)).current;
     const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const apiOrigin = useMemo(() => normalizeApiOrigin(getDefaultApiUrl()), []);
+    const apiOrigin = API_ORIGIN;
 
     const loadChatsFromInbox = useCallback(async () => {
         if (!currentUserId) {

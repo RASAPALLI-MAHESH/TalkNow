@@ -1,36 +1,10 @@
 // This file talks to the backend to handle authentication related tasks such as login, logout, and registration.
 import axios from 'axios';
-import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { API_URL } from './config';
 
-const inferDevServerBaseUrl = (): string | null => {
-    // In Expo dev, hostUri often looks like: "192.168.1.10:8082".
-    // Using this IP helps physical devices reach your backend on the same machine.
-    const hostUri = (Constants as any)?.expoConfig?.hostUri as string | undefined;
-    if (!hostUri || typeof hostUri !== 'string') return null;
-
-    const host = hostUri.split(':')[0]?.trim();
-    if (!host || host === 'localhost' || host === '127.0.0.1') return null;
-
-    return `http://${host}:8080`;
-};
-
-const getDefaultApiUrl = (): string => {
-    // Prefer explicit configuration.
-    const envUrl = process.env.EXPO_PUBLIC_API_URL;
-    if (typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
-
-    // Expo dev: infer from host URI.
-    const inferred = inferDevServerBaseUrl();
-    if (inferred) return inferred;
-
-    // Emulator defaults.
-    if (Platform.OS === 'android') return 'http://10.0.2.2:8080';
-    return 'http://localhost:8080';
-};
-
-const API_URL = getDefaultApiUrl();
+// API_URL is now imported from ./config
 
 export type AuthUser = {
     id?: string;
