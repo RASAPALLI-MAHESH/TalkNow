@@ -6,6 +6,7 @@
     "start": "expo start",
     "backend": "node backend/server.js",
     "migrate:images": "node backend/scripts/migrate-images-to-media.js",
+    "test:e2e": "node backend/tests/security-e2e.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",

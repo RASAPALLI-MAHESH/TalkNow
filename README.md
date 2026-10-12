@@ -81,6 +81,10 @@ Or equivalently:
 node server.js
 ```
 
+### End-to-end tests
+
+`npm run test:e2e` boots the backend against a throwaway database and checks auth, sessions, refresh tokens, the WebSocket, images, block/report, push payloads, account deletion and rate limits. Point `TEST_MONGO_URL` at a MongoDB you can write to (default `mongodb://127.0.0.1:27017`); the test database is dropped at the end.
+
 ### Testing password reset locally
 
 If you want to test the forgot/reset password flow without waiting for email delivery, you can run:
