@@ -6,25 +6,15 @@
 
   Notes:
   - Calls POST /api/auth/forgot-password
-  - Reads the generated reset OTP from MongoDB (User.resetOtp)
+  - Asks for the code. Codes are stored hashed, so read it from the email, or from the
+    backend logs when BREVO_API_KEY is not set (development fallback).
   - Calls POST /api/auth/reset-password
 */
 
 require('dotenv').config();
 
 const axios = require('axios');
-const mongoose = require('mongoose');
-
-const User = require('./backend/models/user');
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const normalizeMongoUri = (raw) => {
-  if (!raw) return 'mongodb://localhost:27017/productiv';
-  // If URI ends with '/', add a default db name to avoid connecting to 'test' unintentionally.
-  if (raw.endsWith('/')) return `${raw}productiv`;
-  return raw;
-};
+const readline = require('readline/promises');
 
 const normalizeApiBase = (raw) => {
   if (!raw) return 'http://localhost:8080';
@@ -41,44 +31,24 @@ async function main() {
     process.exit(2);
   }
 
-  const mongoUri = normalizeMongoUri(process.env.MONGO_URI);
-
   console.log(`API base: ${apiBase}`);
   console.log(`Target email: ${email}`);
 
-  await mongoose.connect(mongoUri, {
-    maxPoolSize: 5,
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-  });
+  console.log('1) Requesting forgot-password OTP...');
+  await axios.post(`${apiBase}/api/auth/forgot-password`, { email }, { timeout: 10000 });
 
-  try {
-    console.log('1) Requesting forgot-password OTP...');
-    await axios.post(`${apiBase}/api/auth/forgot-password`, { email }, { timeout: 10000 });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const otp = (await rl.question('2) Enter the code from the email or backend log: ')).trim();
+  rl.close();
 
-    // Give Mongo a moment to persist.
-    await sleep(300);
+  console.log('3) Resetting password...');
+  const resetRes = await axios.post(
+    `${apiBase}/api/auth/reset-password`,
+    { email, otp, newPassword },
+    { timeout: 10000 }
+  );
 
-    const user = await User.findOne({ email }).lean();
-    const otp = user?.resetOtp;
-
-    if (!otp) {
-      throw new Error('No resetOtp found for that user. Ensure the email exists and forgot-password succeeded.');
-    }
-
-    console.log(`2) OTP fetched from DB: ${otp}`);
-    console.log('3) Resetting password...');
-
-    const resetRes = await axios.post(
-      `${apiBase}/api/auth/reset-password`,
-      { email, otp, newPassword },
-      { timeout: 10000 }
-    );
-
-    console.log('Success:', resetRes.data);
-  } finally {
-    await mongoose.disconnect();
-  }
+  console.log('Success:', resetRes.data);
 }
 
 main().catch((err) => {

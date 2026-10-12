@@ -1,5 +1,16 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const router = express.Router();
+
+// Stricter per-IP limit on routes that send emails or check passwords and one-time codes.
+const credentialLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    message: { message: "Too many attempts. Please wait and try again." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+});
 const authController = require("../Controllers/AuthController");
 const authMiddleware = require("../middleware/authMiddleware");
 const { searchUsers } = require("../searchUsers");
@@ -19,15 +30,15 @@ const {
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
 const { markAsDelivered, markAsRead, getInbox: getMessageServiceInbox, getTotalUnread, recomputeUnread } = require('../services/messageService');
 // Signup Flow
-router.post("/send-signup-otp", authController.sendSignupOtp);
-router.post("/verify-signup-otp", authController.verifySignupOtp);
+router.post("/send-signup-otp", credentialLimiter, authController.sendSignupOtp);
+router.post("/verify-signup-otp", credentialLimiter, authController.verifySignupOtp);
 router.get('/check-username', authController.checkUsernameAvailability);
-router.post("/signup", authController.signUp);
+router.post("/signup", credentialLimiter, authController.signUp);
 
 // Login and Password Reset
-router.post("/login", authController.login);
-router.post("/forgot-password", authController.forgotPassword);
-router.post("/reset-password", authController.resetPassword);
+router.post("/login", credentialLimiter, authController.login);
+router.post("/forgot-password", credentialLimiter, authController.forgotPassword);
+router.post("/reset-password", credentialLimiter, authController.resetPassword);
 
 // Protected routes
 router.post("/logout", authMiddleware, authController.logout);

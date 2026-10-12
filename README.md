@@ -68,7 +68,7 @@ If you want to test the forgot/reset password flow without waiting for email del
 node test-password-reset.js <email> <newPassword> [apiBase]
 ```
 
-This calls the HTTP endpoints and reads the generated OTP from MongoDB for local testing.
+This calls the HTTP endpoints and asks for the code. Codes are stored hashed, so take it from the email, or from the backend log when `BREVO_API_KEY` is not set.
 
 In the output, you'll find options to open the app in a
 

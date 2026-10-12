@@ -123,13 +123,22 @@ const clearToken = async () => {
     await SecureStore.deleteItemAsync('userToken');
 };
 
-// Response interceptor: if a token is rejected, clear it so the app can recover cleanly.
+// Set by AuthProvider so a rejected session also signs the user out of the UI.
+let onUnauthorized: (() => void) | null = null;
+
+export const setUnauthorizedHandler = (handler: (() => void) | null) => {
+    onUnauthorized = handler;
+};
+
+// Response interceptor: if a token is rejected (expired, logged out, password reset), sign out.
 client.interceptors.response.use(
     (response) => response,
     async (error) => {
         const status = error?.response?.status;
-        if (status === 401) {
+        const hadToken = !!error?.config?.headers?.Authorization;
+        if (status === 401 && hadToken) {
             await clearToken();
+            onUnauthorized?.();
         }
         return Promise.reject(error);
     }
@@ -224,12 +233,13 @@ export const updateProfile = async (data: any): Promise<any> => {
 };
 
 export const logout = async (): Promise<void> => {
-    await clearToken();
     try {
+        // Must run before the token is cleared so the server can revoke this session.
         await client.post('/logout');
     } catch (e) {
         // Safe to ignore if server unreachable
     }
+    await clearToken();
 };
 
 export const followUser = async (targetUserId: string): Promise<AuthResponse> => {

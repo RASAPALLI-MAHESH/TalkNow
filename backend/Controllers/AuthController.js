@@ -1,15 +1,27 @@
+const crypto = require('crypto');
 const User = require("../models/user");
 const OtpModel = require("../models/otp");
+const Session = require("../models/session");
 const bcrypt = require('bcryptjs');
-const { signAuthToken } = require("../config/Jwthandling");
+const { signAuthToken, getJwtSecret } = require("../config/Jwthandling");
 const sendOtp = require("../services/otpService");
+const { disconnectSessions } = require("../services/websocketServer");
 const mongoose = require('mongoose');
 
-const generateToken = (userId) => {
-    return signAuthToken({ id: String(userId) }, { expiresIn: "30d" });
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Every token is tied to a Session row so it can be revoked (logout, password reset).
+const issueAuthToken = async (userId) => {
+    const session = await Session.create({
+        userId,
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+    });
+    return signAuthToken({ id: String(userId), sid: String(session._id) }, { expiresIn: "30d" });
 };
 
 const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 
 const isOtpExpired = (createdAt) => {
     if (!createdAt) return true;
@@ -18,23 +30,41 @@ const isOtpExpired = (createdAt) => {
     return Date.now() - created > OTP_TTL_MS;
 };
 
+const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
+
+// Keyed hash so a database leak alone does not reveal live codes.
+const hashOtp = (email, otp) =>
+    crypto.createHmac('sha256', getJwtSecret()).update(`${email}:${otp}`).digest('hex');
+
+const otpMatches = (email, otp, storedHash) => {
+    if (!otp || typeof storedHash !== 'string' || !storedHash) return false;
+    const a = Buffer.from(hashOtp(email, otp), 'hex');
+    const b = Buffer.from(storedHash, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
 const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase();
 const normalizeUsername = (value) => String(value ?? '').trim();
 const normalizeFirstname = (value) => String(value ?? '').trim();
+const normalizeOtp = (value) => String(value ?? '').trim();
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,24}$/;
 const PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).{6,72}$/;
+const PASSWORD_RULE_MESSAGE = 'Password must be 6-72 chars and include at least 1 uppercase letter and 1 number';
 const MAX_PROFILE_PICTURE_CHARS = 8 * 1024 * 1024;
 
+// Images must be reachable by other users: a public https URL or an inline data URI.
 const isValidProfilePicture = (value) => {
     if (!value) return true;
     if (value.length > MAX_PROFILE_PICTURE_CHARS) return false;
     return (
-        /^https?:\/\//i.test(value) ||
-        /^file:\/\//i.test(value) ||
+        /^https:\/\/\S+$/i.test(value) ||
         /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(value)
     );
 };
+
+// Used for timing-equal login failures when the username does not exist.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('talknow-dummy-password', 10);
 
 const asMongoDuplicateKeyMessage = (err) => {
     // Mongoose wraps MongoServerError; prefer consistent checks.
@@ -52,6 +82,44 @@ const isEmailProviderError = (err) => {
     return msg.includes('BREVO_') || msg.startsWith('Brevo email send failed');
 };
 
+const EMAIL_SEND_FAILED_MESSAGE = 'Could not send the email right now. Please try again later.';
+
+const serverError = (res, err, context) => {
+    console.error(`${context}:`, err);
+    return res.status(500).json({ message: "Server error" });
+};
+
+/**
+ * Checks a signup code. Each check uses one attempt (counted atomically, so parallel
+ * guesses cannot get past the limit); a correct code resets the counter.
+ */
+const checkSignupOtp = async (email, otp) => {
+    if (!email || !otp) return false;
+
+    const record = await OtpModel.findOneAndUpdate(
+        { email, attempts: { $lt: OTP_MAX_ATTEMPTS } },
+        { $inc: { attempts: 1 } },
+        { returnDocument: 'after' }
+    );
+    if (!record) return false;
+
+    // TTL indexes are not guaranteed to delete instantly, so enforce expiry in app logic too.
+    if (isOtpExpired(record.createdAt)) {
+        await OtpModel.deleteOne({ _id: record._id });
+        return false;
+    }
+
+    if (otpMatches(email, otp, record.otpHash)) {
+        await OtpModel.updateOne({ _id: record._id }, { $set: { attempts: 0 } });
+        return true;
+    }
+
+    if (record.attempts >= OTP_MAX_ATTEMPTS) {
+        await OtpModel.deleteOne({ _id: record._id });
+    }
+    return false;
+};
+
 exports.sendSignupOtp = async (req, res) => {
     try {
         const email = normalizeEmail(req.body?.email);
@@ -62,46 +130,47 @@ exports.sendSignupOtp = async (req, res) => {
         if (userExists) {
             return res.status(400).json({ message: "User already exists with this email" });
         }
-        
-        const otp = Math.floor(100000 + Math.random()*900000).toString();
+
+        const existing = await OtpModel.findOne({ email }).select('createdAt').lean();
+        if (existing?.createdAt && Date.now() - new Date(existing.createdAt).getTime() < OTP_RESEND_COOLDOWN_MS) {
+            return res.status(429).json({ message: "Please wait a minute before requesting another code" });
+        }
+
+        const otp = generateOtp();
         await OtpModel.findOneAndUpdate(
-            { email }, 
-            { otp, createdAt: new Date() }, 
+            { email },
+            { otpHash: hashOtp(email, otp), attempts: 0, createdAt: new Date() },
             { upsert: true, returnDocument: 'after' }
         );
-        
-        const result = await sendOtp(email, otp);
-        res.status(200).json({ message: "OTP sent successfully", messageId: result?.messageId });
+
+        await sendOtp(email, otp);
+        res.status(200).json({ message: "OTP sent successfully" });
     } catch(err) {
         const dup = asMongoDuplicateKeyMessage(err);
         if (dup) return res.status(400).json({ message: dup });
         if (isEmailProviderError(err)) {
-            return res.status(502).json({ message: err.message });
+            console.error('Signup OTP email failed:', err.message);
+            return res.status(502).json({ message: EMAIL_SEND_FAILED_MESSAGE });
         }
-        res.status(500).json({ message: "Server error", error: err.message });
+        serverError(res, err, 'sendSignupOtp failed');
     }
 }
 
 exports.verifySignupOtp = async (req, res) => {
     try {
         const email = normalizeEmail(req.body?.email);
-        const otp = String(req.body?.otp ?? '').trim();
+        const otp = normalizeOtp(req.body?.otp);
         if (!email || !otp) {
             return res.status(400).json({ message: "Email and OTP are required" });
         }
-        const otpRecord = await OtpModel.findOne({ email });
 
-        // TTL indexes are not guaranteed to delete instantly, so enforce expiry in app logic too.
-        if (!otpRecord || isOtpExpired(otpRecord.createdAt) || otpRecord.otp !== otp) {
-            if (otpRecord && isOtpExpired(otpRecord.createdAt)) {
-                await OtpModel.deleteOne({ email });
-            }
+        if (!(await checkSignupOtp(email, otp))) {
             return res.status(400).json({ message: "Invalid or expired OTP" });
         }
-        
+
         res.status(200).json({ message: "OTP verified successfully", verified: true });
     } catch(err) {
-        res.status(500).json({ message: "Server error", error: err.message });
+        serverError(res, err, 'verifySignupOtp failed');
     }
 }
 
@@ -121,7 +190,7 @@ exports.checkUsernameAvailability = async (req, res) => {
         const exists = await User.exists({ username });
         return res.status(200).json({ available: !Boolean(exists) });
     } catch (err) {
-        return res.status(500).json({ message: 'Server error', error: err.message });
+        return serverError(res, err, 'checkUsernameAvailability failed');
     }
 };
 
@@ -131,7 +200,7 @@ exports.signUp = async (req, res) => {
         const username = normalizeUsername(req.body?.username);
         const email = normalizeEmail(req.body?.email);
         const password = String(req.body?.password ?? '');
-        const otp = String(req.body?.otp ?? '').trim();
+        const otp = normalizeOtp(req.body?.otp);
         const profilePicture = String(req.body?.profilePicture ?? '').trim();
 
         if (!Firstname || !username || !password || !email || !otp) {
@@ -141,21 +210,17 @@ exports.signUp = async (req, res) => {
             return res.status(400).json({ message: 'Username must be 3-24 characters and use letters, numbers, or underscore only' });
         }
         if (!PASSWORD_REGEX.test(password)) {
-            return res.status(400).json({ message: 'Password must be 6-72 chars and include at least 1 uppercase letter and 1 number' });
+            return res.status(400).json({ message: PASSWORD_RULE_MESSAGE });
         }
         if (!isValidProfilePicture(profilePicture)) {
-            return res.status(400).json({ message: 'Invalid profile picture URL' });
+            return res.status(400).json({ message: 'Invalid profile picture' });
         }
-        
+
         // Final OTP check at creation
-        const otpRecord = await OtpModel.findOne({ email });
-        if (!otpRecord || isOtpExpired(otpRecord.createdAt) || otpRecord.otp !== otp) {
-            if (otpRecord && isOtpExpired(otpRecord.createdAt)) {
-                await OtpModel.deleteOne({ email });
-            }
+        if (!(await checkSignupOtp(email, otp))) {
             return res.status(400).json({ message: "Email not verified or OTP expired" });
         }
-        
+
         const [usernameExists, emailExists] = await Promise.all([
             User.exists({ username }),
             User.exists({ email }),
@@ -176,14 +241,14 @@ exports.signUp = async (req, res) => {
             profilePicture
         });
         await newUser.save();
-        
+
         // Clean up OTP
         await OtpModel.deleteOne({ email });
-        
-        const token = generateToken(newUser._id);
+
+        const token = await issueAuthToken(newUser._id);
         res.status(201).json({
-            message: "User created successfully", 
-            token, 
+            message: "User created successfully",
+            token,
             user: {
                 id: newUser._id,
                 username: newUser.username,
@@ -194,29 +259,30 @@ exports.signUp = async (req, res) => {
     } catch(err) {
         const dup = asMongoDuplicateKeyMessage(err);
         if (dup) return res.status(400).json({ message: dup });
-        res.status(500).json({message: "Server error", error: err.message});
+        serverError(res, err, 'signUp failed');
     }
 }
 
 exports.login = async (req, res) => {
     try {
-        const {username , password} = req.body;
+        // Coerce to strings so objects like { "$ne": null } can't become query operators.
+        const username = normalizeUsername(req.body?.username);
+        const password = String(req.body?.password ?? '');
         if (!username || !password) {
             return res.status(400).json({ message: "Username and password are required" });
         }
-        const existingUser = await User.findOne({username});
-        if(!existingUser){
-            return res.status(404).json({message: "User not found"});
+        const existingUser = await User.findOne({ username });
+
+        // Same response and similar timing whether or not the username exists.
+        const isPasswordValid = await bcrypt.compare(password, existingUser?.password ?? DUMMY_PASSWORD_HASH);
+        if (!existingUser || !isPasswordValid) {
+            return res.status(401).json({ message: "Invalid username or password" });
         }
-        const isPasswordValid = await bcrypt.compare(password , existingUser.password);
-        if(!isPasswordValid){
-            return res.status(401).json({message: "Invalid credentials"});
-        }
-        
-        const token = generateToken(existingUser._id);
+
+        const token = await issueAuthToken(existingUser._id);
         res.status(200).json({
-            message: "Login successful", 
-            token, 
+            message: "Login successful",
+            token,
             user: {
                 id: existingUser._id,
                 username: existingUser.username,
@@ -225,61 +291,101 @@ exports.login = async (req, res) => {
             }
         });
     } catch(err) {
-        res.status(500).json({message: "Server error", error: err.message});
+        serverError(res, err, 'login failed');
     }
 }
 
+const FORGOT_PASSWORD_RESPONSE = { message: "If an account exists for this email, a code has been sent." };
+
 exports.forgotPassword = async (req, res) => {
     try {
-        const {email} = req.body;
+        const email = normalizeEmail(req.body?.email);
         if (!email) {
             return res.status(400).json({ message: "Email is required" });
         }
-        const existingUser = await User.findOne({email});
-        if(!existingUser){
-            return res.status(404).json({message: "User not found"});
+        const existingUser = await User.findOne({ email });
+
+        // Same response for unknown emails and during the resend cooldown.
+        if (!existingUser) {
+            return res.status(200).json(FORGOT_PASSWORD_RESPONSE);
         }
-        const otp = Math.floor(100000 + Math.random()*900000).toString();
-        existingUser.resetOtp = otp;
-        existingUser.otpExpiry = Date.now() + 10*60*1000;
+        const lastSent = existingUser.resetOtpSentAt ? new Date(existingUser.resetOtpSentAt).getTime() : 0;
+        if (Date.now() - lastSent < OTP_RESEND_COOLDOWN_MS) {
+            return res.status(200).json(FORGOT_PASSWORD_RESPONSE);
+        }
+
+        const otp = generateOtp();
+        existingUser.resetOtpHash = hashOtp(email, otp);
+        existingUser.otpExpiry = new Date(Date.now() + OTP_TTL_MS);
+        existingUser.resetOtpSentAt = new Date();
+        existingUser.resetOtpAttempts = 0;
         await existingUser.save();
-        const result = await sendOtp(email, otp);
-        res.status(200).json({message: "OTP sent to email", messageId: result?.messageId});
+        await sendOtp(email, otp);
+        res.status(200).json(FORGOT_PASSWORD_RESPONSE);
     } catch(err) {
         if (isEmailProviderError(err)) {
-            return res.status(502).json({ message: err.message });
+            console.error('Password reset email failed:', err.message);
+            return res.status(502).json({ message: EMAIL_SEND_FAILED_MESSAGE });
         }
-        res.status(500).json({message: "Server error", error: err.message});
+        serverError(res, err, 'forgotPassword failed');
     }
 }
 
 exports.resetPassword = async (req, res) => {
     try {
-        const { email, otp, newpassword, newPassword } = req.body;
-        const finalNewPassword = newpassword || newPassword;
+        const email = normalizeEmail(req.body?.email);
+        const otp = normalizeOtp(req.body?.otp);
+        const finalNewPassword = String(req.body?.newpassword ?? req.body?.newPassword ?? '');
         if (!email || !otp || !finalNewPassword) {
             return res.status(400).json({ message: "email, otp and newPassword are required" });
         }
-        const existingUser = await User.findOne({email});
-        if(!existingUser) {
-            return res.status(404).json({message: "User not found"});
+        if (!PASSWORD_REGEX.test(finalNewPassword)) {
+            return res.status(400).json({ message: PASSWORD_RULE_MESSAGE });
         }
-        if(existingUser.resetOtp !== otp || existingUser.otpExpiry < Date.now()){
-            return res.status(400).json({message: "Invalid or expired OTP"});
+
+        // Use up one attempt before comparing, atomically, so parallel guesses can't exceed the limit.
+        const existingUser = await User.findOneAndUpdate(
+            {
+                email,
+                resetOtpHash: { $ne: null },
+                otpExpiry: { $gt: new Date() },
+                resetOtpAttempts: { $lt: OTP_MAX_ATTEMPTS },
+            },
+            { $inc: { resetOtpAttempts: 1 } },
+            { returnDocument: 'after' }
+        );
+
+        if (!existingUser || !otpMatches(email, otp, existingUser.resetOtpHash)) {
+            if (existingUser && existingUser.resetOtpAttempts >= OTP_MAX_ATTEMPTS) {
+                await User.updateOne({ _id: existingUser._id }, { $set: { resetOtpHash: null, otpExpiry: null } });
+            }
+            return res.status(400).json({ message: "Invalid or expired OTP" });
         }
-        const hashedPassword = await bcrypt.hash(finalNewPassword , 10);
-        existingUser.password = hashedPassword;
-        existingUser.resetOtp = null;
+
+        existingUser.password = await bcrypt.hash(finalNewPassword , 10);
+        existingUser.resetOtpHash = null;
         existingUser.otpExpiry = null;
+        existingUser.resetOtpAttempts = 0;
         await existingUser.save();
+
+        // Sign out every device: whoever had the old password loses access.
+        await Session.deleteMany({ userId: existingUser._id });
+        disconnectSessions({ userId: existingUser._id });
+
         res.status(200).json({message: "Password reset successful"});
     } catch(err) {
-        res.status(500).json({message: "Server error", error: err.message});
+        serverError(res, err, 'resetPassword failed');
     }
 }
 
 exports.logout = async (req, res) => {
-    res.status(200).json({message: "Logout successful"});
+    try {
+        await Session.deleteOne({ _id: req.user.sid });
+        disconnectSessions({ userId: req.user.id, sessionId: req.user.sid });
+        res.status(200).json({message: "Logout successful"});
+    } catch (err) {
+        serverError(res, err, 'logout failed');
+    }
 }
 
 exports.userProfile = async (req, res) => {
@@ -304,18 +410,21 @@ exports.userProfile = async (req, res) => {
             following: existingUser.following ? existingUser.following.length : 0
         });
     } catch(err) {
-         res.status(500).json({message: "Server error", error: err.message});
+        serverError(res, err, 'userProfile failed');
     }
 }
 
 exports.getUserProfile = async (req, res) => {
     try {
-        const userId = req.params.userId;
+        const userId = String(req.params.userId ?? '');
+        if (!mongoose.Types.ObjectId.isValid(userId)) {
+            return res.status(404).json({ message: "User not found" });
+        }
         const existingUser = await User.findById(userId);
         if(!existingUser){
             return res.status(404).json({message: "User not found"});
         }
-        // Exclude email for public requests if we want, but for simplicity returning same payload
+        // Public profile: email is intentionally left out.
         res.status(200).json({
             id: existingUser._id,
             username: existingUser.username,
@@ -329,9 +438,107 @@ exports.getUserProfile = async (req, res) => {
             following: existingUser.following ? existingUser.following.length : 0
         });
     } catch(err) {
-         res.status(500).json({message: "Server error", error: err.message});
+        serverError(res, err, 'getUserProfile failed');
     }
 }
+
+const MAX_FIRSTNAME_CHARS = 50;
+const MAX_BIO_CHARS = 300;
+const MAX_HERO_TEXT_CHARS = 280;
+const MAX_URL_CHARS = 2048;
+const MAX_CUSTOM_LINKS = 20;
+const MAX_LINK_LABEL_CHARS = 60;
+const SOCIAL_PLATFORMS = ['whatsapp', 'instagram', 'linkedin', 'twitter'];
+
+const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * Accepts only http(s) links; a link typed without a scheme is treated as https.
+ * Returns '' for empty input and null for anything else (javascript:, intent:, tel:, ...),
+ * because other users open these links straight from the profile.
+ */
+const normalizeWebUrl = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    if (raw.length > MAX_URL_CHARS) return null;
+    const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+    try {
+        const url = new URL(candidate);
+        if ((url.protocol === 'https:' || url.protocol === 'http:') && url.hostname) return candidate;
+    } catch {
+        // fall through
+    }
+    return null;
+};
+
+class ProfileValidationError extends Error {}
+
+const fail = (message) => {
+    throw new ProfileValidationError(message);
+};
+
+const validateProfileUpdates = (body) => {
+    const updates = {};
+
+    if (body.Firstname !== undefined) {
+        const Firstname = normalizeFirstname(body.Firstname);
+        if (!Firstname || Firstname.length > MAX_FIRSTNAME_CHARS) fail(`Name must be 1-${MAX_FIRSTNAME_CHARS} characters`);
+        updates.Firstname = Firstname;
+    }
+
+    if (body.profilePicture !== undefined) {
+        const profilePicture = String(body.profilePicture ?? '').trim();
+        if (!isValidProfilePicture(profilePicture)) fail('Invalid profile picture');
+        updates.profilePicture = profilePicture;
+    }
+
+    if (body.bio !== undefined) {
+        const bio = String(body.bio ?? '').trim();
+        if (bio.length > MAX_BIO_CHARS) fail(`Bio must be at most ${MAX_BIO_CHARS} characters`);
+        updates.bio = bio;
+    }
+
+    if (body.heroData !== undefined) {
+        const hero = body.heroData;
+        if (!isPlainObject(hero)) fail('Invalid hero data');
+        const text = String(hero.text ?? '');
+        const themeId = String(hero.themeId ?? 't1');
+        const customImageUri = String(hero.customImageUri ?? '').trim();
+        if (text.length > MAX_HERO_TEXT_CHARS) fail(`Hero text must be at most ${MAX_HERO_TEXT_CHARS} characters`);
+        if (!/^[a-z0-9_-]{1,20}$/i.test(themeId)) fail('Invalid hero theme');
+        if (!isValidProfilePicture(customImageUri)) fail('Invalid hero image');
+        updates.heroData = { text, themeId, customImageUri };
+    }
+
+    if (body.socialUrls !== undefined) {
+        if (!isPlainObject(body.socialUrls)) fail('Invalid social links');
+        const socialUrls = {};
+        for (const platform of SOCIAL_PLATFORMS) {
+            const url = normalizeWebUrl(body.socialUrls[platform]);
+            if (url === null) fail(`Invalid ${platform} link`);
+            socialUrls[platform] = url;
+        }
+        updates.socialUrls = socialUrls;
+    }
+
+    if (body.customLinks !== undefined) {
+        if (!Array.isArray(body.customLinks) || body.customLinks.length > MAX_CUSTOM_LINKS) {
+            fail(`You can add at most ${MAX_CUSTOM_LINKS} links`);
+        }
+        updates.customLinks = body.customLinks.map((link) => {
+            if (!isPlainObject(link)) fail('Invalid link');
+            const id = String(link.id ?? '');
+            const label = String(link.label ?? '').trim();
+            const url = normalizeWebUrl(link.url);
+            if (!/^[\w-]{1,64}$/.test(id)) fail('Invalid link id');
+            if (!label || label.length > MAX_LINK_LABEL_CHARS) fail(`Link labels must be 1-${MAX_LINK_LABEL_CHARS} characters`);
+            if (!url) fail('Links must be valid http(s) URLs');
+            return { id, label, url };
+        });
+    }
+
+    return updates;
+};
 
 exports.updateProfile = async (req, res) => {
     try {
@@ -339,27 +546,21 @@ exports.updateProfile = async (req, res) => {
             return res.status(401).json({ message: "Unauthorized" });
         }
         const userId = req.user.id;
-        const updates = {};
-        
-        // Allowed fields to update
-        if (req.body.Firstname !== undefined) updates.Firstname = normalizeFirstname(req.body.Firstname);
-        if (req.body.profilePicture !== undefined) updates.profilePicture = req.body.profilePicture;
-        if (req.body.bio !== undefined) updates.bio = String(req.body.bio).trim();
-        
-        if (req.body.heroData !== undefined) {
-            updates.heroData = req.body.heroData; // { text, themeId, customImageUri }
-        }
-        if (req.body.socialUrls !== undefined) {
-            updates.socialUrls = req.body.socialUrls; // { whatsapp, instagram, linkedin, twitter }
-        }
-        if (req.body.customLinks !== undefined) {
-            updates.customLinks = req.body.customLinks; // array of objects
+
+        let updates;
+        try {
+            updates = validateProfileUpdates(req.body ?? {});
+        } catch (err) {
+            if (err instanceof ProfileValidationError) {
+                return res.status(400).json({ message: err.message });
+            }
+            throw err;
         }
 
         const updatedUser = await User.findByIdAndUpdate(
             userId,
             { $set: updates },
-            { new: true, runValidators: true }
+            { returnDocument: 'after', runValidators: true }
         );
 
         if (!updatedUser) {
@@ -381,7 +582,7 @@ exports.updateProfile = async (req, res) => {
             }
         });
     } catch (err) {
-        return res.status(500).json({ message: "Server error", error: err.message });
+        return serverError(res, err, 'updateProfile failed');
     }
 }
 
@@ -410,7 +611,7 @@ exports.followUser = async (req, res) => {
 
         return res.status(200).json({ message: 'Followed successfully' });
     } catch (err) {
-        return res.status(500).json({ message: 'Server error', error: err.message });
+        return serverError(res, err, 'followUser failed');
     }
 };
 
@@ -436,6 +637,6 @@ exports.unfollowUser = async (req, res) => {
 
         return res.status(200).json({ message: 'Unfollowed successfully' });
     } catch (err) {
-        return res.status(500).json({ message: 'Server error', error: err.message });
+        return serverError(res, err, 'unfollowUser failed');
     }
 };

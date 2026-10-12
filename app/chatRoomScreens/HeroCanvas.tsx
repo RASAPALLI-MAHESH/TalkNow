@@ -75,11 +75,14 @@ const HeroCanvas = ({ navigation, route }: any) => {
                 mediaTypes: ImagePicker.MediaTypeOptions.Images,
                 allowsEditing: true,
                 aspect: [4, 5], // Story-ish ratio
-                quality: 0.8,
+                quality: 0.6,
+                base64: true,
             });
 
-            if (!result.canceled && result.assets && result.assets.length > 0) {
-                setCustomImageUri(result.assets[0].uri);
+            const asset = result.canceled ? undefined : result.assets?.[0];
+            if (asset?.base64) {
+                // Send the image itself: a local file path can't be seen by other users.
+                setCustomImageUri(`data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`);
             }
         } finally {
             setIsPickingImage(false);

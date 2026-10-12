@@ -213,9 +213,12 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                 allowsEditing: true,
                 aspect: [1, 1],
                 quality: 0.6,
+                base64: true,
             });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-                const uri = result.assets[0].uri;
+            const asset = result.canceled ? undefined : result.assets?.[0];
+            if (asset?.base64) {
+                // Send the image itself: a local file path can't be seen by other users.
+                const uri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
                 setLocalPeerAvatar(uri);
                 updateProfile({ profilePicture: uri }).catch(console.error);
                 updateUser({ profilePicture: uri });
@@ -243,7 +246,8 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     const handleSocialPress = (platform: SocialPlatform) => {
         const url = socialUrls[platform];
         if (url && !isSelf) {
-            Linking.openURL(url).catch(() => {});
+            // Only open web links, whatever the profile data says.
+            if (/^https?:\/\//i.test(url)) Linking.openURL(url).catch(() => {});
         } else if (isSelf) {
             setActiveSocialPlatform(platform);
             setSocialInputUrl(url || '');

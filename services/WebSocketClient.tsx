@@ -1,5 +1,6 @@
 import useAuth from '@/hooks/useAuth';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import * as SecureStore from 'expo-secure-store';
+import { useEffect, useRef, useState } from 'react';
 import { WS_URL } from './config';
 
 type WsIncomingMessage = {
@@ -12,6 +13,8 @@ type WsIncomingMessage = {
 export const useWebSocketClient = () => {
     const { user } = useAuth();
     const wsRef = useRef<WebSocket | null>(null);
+    // True once the server has accepted our token; it rejects anything sent before that.
+    const authedRef = useRef(false);
     const [connected, setConnected] = useState(false);
     const [lastMessage, setLastMessage] = useState<WsIncomingMessage | null>(null);
 
@@ -23,13 +26,20 @@ export const useWebSocketClient = () => {
 
         const socket = new WebSocket(wsUrl);
         wsRef.current = socket;
+        authedRef.current = false;
 
-        socket.onopen = () => {
-            setConnected(true);
-            socket.send(JSON.stringify({ type: 'register', userId }));
+        socket.onopen = async () => {
+            // The server identifies us from the token, so it must be the first message.
+            const token = await SecureStore.getItemAsync('userToken');
+            if (!token || socket.readyState !== WebSocket.OPEN) {
+                socket.close();
+                return;
+            }
+            socket.send(JSON.stringify({ type: 'auth', token }));
         };
 
         socket.onclose = () => {
+            authedRef.current = false;
             setConnected(false);
         };
 
@@ -40,6 +50,10 @@ export const useWebSocketClient = () => {
         socket.onmessage = (event) => {
             try {
                 const data = JSON.parse(String(event.data)) as WsIncomingMessage;
+                if (data.type === 'registered') {
+                    authedRef.current = true;
+                    setConnected(true);
+                }
                 setLastMessage(data);
             } catch {
                 // ignore non-JSON
@@ -58,12 +72,11 @@ export const useWebSocketClient = () => {
     const sendMessage = (to: string, content: string, clientId?: string) => {
         const from = user?.id;
         const socket = wsRef.current;
-        if (!from || !socket || socket.readyState !== WebSocket.OPEN) return false;
+        if (!from || !socket || socket.readyState !== WebSocket.OPEN || !authedRef.current) return false;
 
         socket.send(JSON.stringify({
             type: 'send_message',
             to,
-            from,
             content,
             clientId,
             date: new Date().toISOString(),
@@ -74,7 +87,7 @@ export const useWebSocketClient = () => {
     const markRead = (peerId: string, upTo?: string) => {
         const from = user?.id;
         const socket = wsRef.current;
-        if (!from || !socket || socket.readyState !== WebSocket.OPEN) return false;
+        if (!from || !socket || socket.readyState !== WebSocket.OPEN || !authedRef.current) return false;
 
         socket.send(JSON.stringify({
             type: 'mark_read',

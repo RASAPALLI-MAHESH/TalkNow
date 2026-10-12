@@ -3,8 +3,27 @@ const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Connection = require('../models/connection');
 const User = require('../models/user');
+const { resolveAuthToken } = require('../middleware/authMiddleware');
 
+const AUTH_TIMEOUT_MS = 10 * 1000;
+const MAX_CONTENT_CHARS = 4000;
+const CLOSE_UNAUTHORIZED = 4001;
+
+// userId -> Set of authenticated sockets (a user can have several screens/devices open).
 const users = new Map();
+
+const addSocket = (userId, ws) => {
+    const set = users.get(userId);
+    if (set) set.add(ws);
+    else users.set(userId, new Set([ws]));
+};
+
+const removeSocket = (ws) => {
+    const set = ws.userId ? users.get(ws.userId) : null;
+    if (!set) return;
+    set.delete(ws);
+    if (set.size === 0) users.delete(ws.userId);
+};
 
 const toSafeId = (value) => {
     if (value && typeof value === 'object') {
@@ -25,12 +44,32 @@ const normalizePair = (leftId, rightId) => {
 
 const emitToUser = (userId, payload) => {
     const cleanId = toSafeId(userId);
-    const recipient = users.get(cleanId);
-    if (recipient && recipient.readyState === WebSocket.OPEN) {
-        recipient.send(JSON.stringify(payload));
-        return true;
+    const sockets = users.get(cleanId);
+    if (!sockets) return false;
+
+    const message = JSON.stringify(payload);
+    let delivered = false;
+    for (const socket of sockets) {
+        if (socket.readyState === WebSocket.OPEN) {
+            socket.send(message);
+            delivered = true;
+        }
     }
-    return false;
+    return delivered;
+};
+
+/**
+ * Closes open sockets after their session is revoked: one session (logout)
+ * or every session of a user (password reset).
+ */
+const disconnectSessions = ({ userId, sessionId }) => {
+    const sockets = users.get(toSafeId(userId));
+    if (!sockets) return;
+    for (const socket of [...sockets]) {
+        if (!sessionId || socket.sessionId === String(sessionId)) {
+            socket.close(CLOSE_UNAUTHORIZED, 'Session ended');
+        }
+    }
 };
 
 /**
@@ -55,9 +94,14 @@ const toObjectId = (value) => new mongoose.Types.ObjectId(toSafeId(value));
  * Render only exposes a single port, so WS must share the same server.
  */
 const attachWebSocketServer = (httpServer) => {
-    const wss = new WebSocket.Server({ server: httpServer, path: '/ws' });
+    const wss = new WebSocket.Server({ server: httpServer, path: '/ws', maxPayload: 64 * 1024 });
 
     wss.on('connection', (ws) => {
+        // The first message must be { type: 'auth', token }. Unauthenticated sockets are dropped.
+        const authTimer = setTimeout(() => {
+            if (!ws.userId) ws.close(CLOSE_UNAUTHORIZED, 'Authentication required');
+        }, AUTH_TIMEOUT_MS);
+
         ws.on('message', async (raw) => {
             let data;
             try {
@@ -68,18 +112,23 @@ const attachWebSocketServer = (httpServer) => {
             }
 
             try {
-                if (data?.type === 'register') {
-                    const userId = toSafeId(data.userId);
-                    if (!userId) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'userId is required for register' }));
+                if (data?.type === 'auth') {
+                    if (ws.userId) return;
+
+                    // Identity comes only from a valid, unrevoked token, never from the client's claims.
+                    const auth = await resolveAuthToken(String(data.token ?? ''));
+                    if (!auth) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
+                        ws.close(CLOSE_UNAUTHORIZED, 'Invalid token');
                         return;
                     }
-                    if (!isValidObjectId(userId)) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'Invalid userId for register' }));
-                        return;
-                    }
+                    if (ws.readyState !== WebSocket.OPEN) return;
+
+                    const userId = auth.id;
+                    clearTimeout(authTimer);
                     ws.userId = userId;
-                    users.set(userId, ws);
+                    ws.sessionId = auth.sid;
+                    addSocket(userId, ws);
                     ws.send(JSON.stringify({ type: 'registered', userId }));
 
                     // Mark previously queued messages as delivered when receiver comes online.
@@ -111,9 +160,14 @@ const attachWebSocketServer = (httpServer) => {
                     return;
                 }
 
+                if (!ws.userId) {
+                    ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
+                    return;
+                }
+
                 if (data?.type === 'send_message') {
                     const to = toSafeId(data.to);
-                    const from = toSafeId(data.from);
+                    const from = ws.userId;
                     const content = String(data.content || '').trim();
 
                     if (!isValidObjectId(to) || !isValidObjectId(from)) {
@@ -128,6 +182,11 @@ const attachWebSocketServer = (httpServer) => {
 
                     if (!content) {
                         ws.send(JSON.stringify({ type: 'error', message: 'Message content is required' }));
+                        return;
+                    }
+
+                    if (content.length > MAX_CONTENT_CHARS) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Message is too long' }));
                         return;
                     }
 
@@ -303,8 +362,8 @@ const attachWebSocketServer = (httpServer) => {
         });
 
         ws.on('close', () => {
-            const userId = ws.userId;
-            if (userId) users.delete(userId);
+            clearTimeout(authTimer);
+            removeSocket(ws);
         });
     });
 
@@ -312,4 +371,4 @@ const attachWebSocketServer = (httpServer) => {
 };
 
 
-module.exports = { attachWebSocketServer, emitToUser, emitNotification };
+module.exports = { attachWebSocketServer, emitToUser, emitNotification, disconnectSessions };
