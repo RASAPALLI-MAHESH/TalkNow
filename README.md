@@ -27,6 +27,18 @@ This repo includes an Express + MongoDB backend in `backend/`.
 - `BREVO_API_KEY` (required to send OTP emails)
 - `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` (optional)
 - `PUBLIC_BASE_URL` (optional; public origin used in image URLs, defaults to the request's host)
+- `REPORTS_EMAIL` (recommended; user reports are emailed here so they can be reviewed quickly)
+- `EXPO_ACCESS_TOKEN` (optional; only if push security is enabled for the Expo project)
+- `CORS_ORIGINS` (optional; comma-separated browser origins allowed in production; the mobile app doesn't need it)
+
+### App build settings
+
+Set these in `eas.json` (`build.<profile>.env`):
+
+- `EXPO_PUBLIC_API_URL`: the API origin, e.g. `https://talknow-nd2i.onrender.com`
+- `EXPO_PUBLIC_PRIVACY_URL` and `EXPO_PUBLIC_TERMS_URL`: public `https://` pages for the privacy policy and terms of use. The app stores require both; they are linked from signup and Settings.
+
+Push notifications need, once per project: an Apple Push key (EAS sets it up during `eas build` for iOS) and FCM V1 credentials for Android (`eas credentials`, plus `google-services.json` referenced from `android.googleServicesFile` in `app.json`). Without them the app works but no pushes arrive.
 
 ### Images
 
@@ -87,16 +99,6 @@ In the output, you'll find options to open the app in a
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
 You can start developing by editing the files inside the **app** directory. This project uses React Navigation.
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
 ## Learn more
 

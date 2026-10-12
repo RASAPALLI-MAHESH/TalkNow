@@ -25,6 +25,12 @@ const sessionSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        // Expo push token of the device signed in with this session; removed with the session.
+        pushToken: {
+            type: String,
+            default: null,
+            index: true,
+        },
         // Pushed forward on each refresh: a device that stays away this long is signed out.
         expiresAt: {
             type: Date,

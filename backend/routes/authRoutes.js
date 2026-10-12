@@ -24,12 +24,12 @@ const {
 } = require("../utils/followfunctions");
 const {
     getInbox,
-    sendMessage,
     getConversationMessages,
     getConnectionCounters,
 } = require('../utils/chatFunctions');
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
 const { markAsRead, getTotalUnread } = require('../services/messageService');
+const { blockUser, unblockUser, listBlockedUsers, reportUser } = require('../utils/safetyFunctions');
 const { isValidObjectId } = require("../utils/identityUtils");
 // Signup Flow
 router.post("/send-signup-otp", credentialLimiter, authController.sendSignupOtp);
@@ -49,6 +49,14 @@ router.post("/logout", authMiddleware, authController.logout);
 router.get("/profile", authMiddleware, authController.userProfile);
 router.get("/profile/:userId", authMiddleware, authController.getUserProfile);
 router.put("/updateProfile", authMiddleware, authController.updateProfile);
+router.post("/push-token", authMiddleware, authController.registerPushToken);
+router.delete("/account", credentialLimiter, authMiddleware, authController.deleteAccount);
+
+// Safety
+router.post("/users/block", authMiddleware, blockUser);
+router.post("/users/unblock", authMiddleware, unblockUser);
+router.get("/users/blocked", authMiddleware, listBlockedUsers);
+router.post("/reports", authMiddleware, reportUser);
 
 // follow  routes 
 router.post("/follow", authMiddleware, followUser);
@@ -59,7 +67,6 @@ router.get("/connections/mutual", authMiddleware, getMutualConnections);
 router.get('/connections/counters', authMiddleware, getConnectionCounters);
 router.get('/chats/inbox', authMiddleware, getInbox);
 router.get('/messages/with/:peerId', authMiddleware, getConversationMessages);
-router.post('/messages/send', authMiddleware, sendMessage);
 router.post('/messages/read', authMiddleware, async (req, res) => {
     try {
         const conversationId = String(req.body?.conversationId ?? '');
@@ -92,7 +99,12 @@ router.get("/search-users", authMiddleware, async (req, res) => {
 
         const users = await searchUsers(query, { limit: 20 });
         const relationships = await getRelationshipMap(req.user.id, users.map((u) => u.id));
-        res.json({ users: users.map((u) => ({ ...u, relationship: relationships.get(u.id) ?? 'none' })) });
+        res.json({
+            users: users
+                .map((u) => ({ ...u, relationship: relationships.get(u.id) ?? 'none' }))
+                // People who blocked you don't show up.
+                .filter((u) => u.relationship !== 'unavailable'),
+        });
     }
     catch(err){
         console.error("Error searching users:", err);

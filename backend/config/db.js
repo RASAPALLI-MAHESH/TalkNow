@@ -1,6 +1,22 @@
 const mongoose = require("mongoose");
 const dns = require('dns');
 
+/**
+ * Production runs with autoIndex off, so without this new indexes (unique constraints,
+ * the TTL that expires sessions and codes) would never be created. createIndexes only
+ * adds missing ones; a failure is logged rather than stopping the server.
+ */
+const ensureIndexes = async () => {
+  const results = await Promise.allSettled(
+    mongoose.modelNames().map((name) => mongoose.model(name).createIndexes())
+  );
+  results.forEach((result, i) => {
+    if (result.status === 'rejected') {
+      console.error(`Index creation failed for ${mongoose.modelNames()[i]}:`, result.reason?.message || result.reason);
+    }
+  });
+};
+
 const connectDB = async () => {
   try {
     // maxPoolSize helps the database handle thousands of concurrent queries rather 
@@ -18,6 +34,7 @@ const connectDB = async () => {
     try {
       await mongoose.connect(mongoUri, connectOptions);
       console.log("MongoDB connected with Connection Pooling Enabled");
+      await ensureIndexes();
       return;
     } catch (firstError) {
       const msg = String(firstError?.message || firstError || '');
@@ -33,6 +50,7 @@ const connectDB = async () => {
       dns.setServers(['1.1.1.1', '8.8.8.8']);
       await mongoose.connect(mongoUri, connectOptions);
       console.log("MongoDB connected (public DNS fallback) with Connection Pooling Enabled");
+      await ensureIndexes();
       return;
     }
   } catch (error) {

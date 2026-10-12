@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Connection = require('../models/connection');
-const { emitToUser } = require('../services/websocketServer');
 const { getActorUserId, isValidObjectId } = require('./identityUtils');
 
 const toSafeUsername = (value) => {
@@ -106,81 +105,6 @@ const getInbox = async (req, res) => {
         return res.status(200).json({ chats });
     } catch (err) {
         console.error('Error fetching inbox:', err);
-        return res.status(500).json({ message: 'Internal server error' });
-    }
-};
-
-const sendMessage = async (req, res) => {
-    try {
-        const fromUserId = getActorUserId(req);
-        const toUserId = String(req.body?.toUserId ?? '').trim();
-        const content = String(req.body?.content ?? '').trim();
-
-        if (!isValidObjectId(fromUserId)) return res.status(401).json({ message: 'Unauthorized' });
-        if (!isValidObjectId(toUserId)) return res.status(400).json({ message: 'Invalid toUserId' });
-        if (fromUserId === toUserId) return res.status(400).json({ message: 'Cannot message yourself' });
-        if (!content) return res.status(400).json({ message: 'Message content is required' });
-
-        const pair = normalizePair(fromUserId, toUserId);
-        if (!pair) return res.status(400).json({ message: 'Invalid participants' });
-
-        const acceptedConnection = await Connection.findOne({
-            pairKey: pair.pairKey,
-            status: 'accepted',
-        })
-            .select('_id')
-            .lean();
-
-        if (!acceptedConnection?._id) {
-            return res.status(403).json({ message: 'Only accepted connections can exchange messages' });
-        }
-
-        const now = new Date();
-
-        const doc = await Message.create({
-            conversationId: acceptedConnection._id,
-            conversationKey: pair.pairKey,
-            participants: pair.participantObjectIds,
-            senderId: new mongoose.Types.ObjectId(fromUserId),
-            receiverId: new mongoose.Types.ObjectId(toUserId),
-            content,
-        });
-
-        const previewText = content.length > 500 ? content.slice(0, 497) + '...' : content;
-
-        await Connection.updateOne(
-            { _id: acceptedConnection._id },
-            {
-                $set: {
-                    hasMessages: true,
-                    lastMessageAt: now,
-                    lastMessagePreview: previewText,
-                },
-                $inc: {
-                    "participants.$[recipient].unreadCount": 1
-                }
-            },
-            {
-                arrayFilters: [{ "recipient.userId": new mongoose.Types.ObjectId(toUserId) }]
-            }
-        );
-
-        const payload = {
-            type: 'new_message',
-            id: String(doc._id),
-            conversationKey: pair.pairKey,
-            from: fromUserId,
-            to: toUserId,
-            content,
-            date: doc.createdAt ? new Date(doc.createdAt).toISOString() : now.toISOString(),
-        };
-
-        emitToUser(toUserId, payload);
-        emitToUser(fromUserId, { type: 'sent', ...payload });
-
-        return res.status(200).json({ message: payload });
-    } catch (err) {
-        console.error('Error sending message:', err);
         return res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -297,7 +221,6 @@ const getConnectionCounters = async (req, res) => {
 
 module.exports = {
     getInbox,
-    sendMessage,
     getConversationMessages,
     getConnectionCounters,
 };

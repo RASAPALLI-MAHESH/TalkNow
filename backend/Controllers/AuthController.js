@@ -2,10 +2,18 @@ const crypto = require('crypto');
 const User = require("../models/user");
 const OtpModel = require("../models/otp");
 const Session = require("../models/session");
+const Media = require("../models/media");
+const Message = require("../models/message");
+const Connection = require("../models/connection");
+const Notification = require("../models/notification");
+const Block = require("../models/block");
+const Report = require("../models/report");
 const bcrypt = require('bcryptjs');
 const { signAuthToken, getJwtSecret } = require("../config/Jwthandling");
 const sendOtp = require("../services/otpService");
-const { disconnectSessions } = require("../services/websocketServer");
+const { sendAccountExistsNotice } = require("../services/otpService");
+const { disconnectSessions, emitToUser } = require("../services/websocketServer");
+const { isExpoPushToken } = require("../services/pushService");
 const {
     InvalidImageError,
     publicBaseUrl,
@@ -139,16 +147,15 @@ exports.sendSignupOtp = async (req, res) => {
         if (!email) {
             return res.status(400).json({ message: "Email is required" });
         }
-        const userExists = await User.findOne({ email });
-        if (userExists) {
-            return res.status(400).json({ message: "User already exists with this email" });
-        }
-
         const existing = await OtpModel.findOne({ email }).select('createdAt').lean();
         if (existing?.createdAt && Date.now() - new Date(existing.createdAt).getTime() < OTP_RESEND_COOLDOWN_MS) {
             return res.status(429).json({ message: "Please wait a minute before requesting another code" });
         }
 
+        // The response is the same whether or not the email is registered, so this form can't be
+        // used to find out who has an account. A registered email gets a notice instead of a code;
+        // its code record is still stored (with a code nobody receives) so the cooldown applies alike.
+        const userExists = await User.exists({ email });
         const otp = generateOtp();
         await OtpModel.findOneAndUpdate(
             { email },
@@ -156,8 +163,12 @@ exports.sendSignupOtp = async (req, res) => {
             { upsert: true, returnDocument: 'after' }
         );
 
-        await sendOtp(email, otp);
-        res.status(200).json({ message: "OTP sent successfully" });
+        if (userExists) {
+            await sendAccountExistsNotice(email);
+        } else {
+            await sendOtp(email, otp);
+        }
+        res.status(200).json({ message: "Check your email for a code" });
     } catch(err) {
         const dup = asMongoDuplicateKeyMessage(err);
         if (dup) return res.status(400).json({ message: dup });
@@ -513,6 +524,10 @@ exports.getUserProfile = async (req, res) => {
             return res.status(404).json({message: "User not found"});
         }
         const relationships = await getRelationshipMap(req.user.id, [userId]);
+        // Someone who blocked you looks like they don't exist.
+        if (relationships.get(userId) === 'unavailable') {
+            return res.status(404).json({ message: "User not found" });
+        }
 
         // Public profile: email is intentionally left out.
         res.status(200).json({
@@ -701,57 +716,72 @@ exports.updateProfile = async (req, res) => {
     }
 }
 
-exports.followUser = async (req, res) => {
+/**
+ * Saves this device's Expo push token on the current session. A device belongs to the
+ * account signed in on it now, so the token is removed from any other session first.
+ */
+exports.registerPushToken = async (req, res) => {
     try {
-        if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
-
-        const userId = String(req.user.id);
-        const targetUserId = String(req.body?.targetUserId ?? req.body?.userId ?? '').trim();
-
-        if (!targetUserId) {
-            return res.status(400).json({ message: 'targetUserId is required' });
+        const token = String(req.body?.token ?? '');
+        if (!isExpoPushToken(token)) {
+            return res.status(400).json({ message: "Invalid push token" });
         }
-        if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-            return res.status(400).json({ message: 'Invalid targetUserId' });
-        }
-        if (userId === targetUserId) {
-            return res.status(400).json({ message: 'You cannot follow yourself' });
-        }
-
-        const target = await User.findById(targetUserId).select('_id');
-        if (!target) return res.status(404).json({ message: 'Target user not found' });
-
-        await User.findByIdAndUpdate(userId, { $addToSet: { following: targetUserId } }, { new: false });
-        await User.findByIdAndUpdate(targetUserId, { $addToSet: { followers: userId } }, { new: false });
-
-        return res.status(200).json({ message: 'Followed successfully' });
+        await Session.updateMany({ pushToken: token, _id: { $ne: req.user.sid } }, { $set: { pushToken: null } });
+        await Session.updateOne({ _id: req.user.sid }, { $set: { pushToken: token } });
+        return res.status(200).json({ ok: true });
     } catch (err) {
-        return serverError(res, err, 'followUser failed');
+        return serverError(res, err, 'registerPushToken failed');
     }
 };
 
-exports.unfollowUser = async (req, res) => {
+/**
+ * Permanently deletes the signed-in account after re-checking the password: profile,
+ * images, messages (both sides of each conversation), connections, notifications,
+ * blocks, the user's own reports and every session. Each step is safe to repeat, so a
+ * failure part-way can simply be retried.
+ */
+exports.deleteAccount = async (req, res) => {
     try {
-        if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
+        const password = String(req.body?.password ?? '');
+        const user = await User.findById(req.user.id).select('_id email password');
+        if (!user) return res.status(404).json({ message: "User not found" });
 
-        const userId = String(req.user.id);
-        const targetUserId = String(req.body?.targetUserId ?? req.body?.userId ?? '').trim();
-
-        if (!targetUserId) {
-            return res.status(400).json({ message: 'targetUserId is required' });
-        }
-        if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
-            return res.status(400).json({ message: 'Invalid targetUserId' });
-        }
-        if (userId === targetUserId) {
-            return res.status(400).json({ message: 'You cannot unfollow yourself' });
+        // 403, not 401: a 401 would make the app treat the session as expired and sign out.
+        if (!password || !(await bcrypt.compare(password, user.password))) {
+            return res.status(403).json({ message: "Incorrect password" });
         }
 
-        await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } }, { new: false });
-        await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } }, { new: false });
+        const userId = user._id;
+        const connections = await Connection.find({ 'participants.userId': userId }).select('participants').lean();
+        const peerIds = new Set();
+        for (const c of connections) {
+            for (const p of c.participants || []) {
+                if (String(p.userId) !== String(userId)) peerIds.add(String(p.userId));
+            }
+        }
 
-        return res.status(200).json({ message: 'Unfollowed successfully' });
+        await Promise.all([
+            Media.deleteMany({ ownerId: userId }),
+            Message.deleteMany({ participants: userId }),
+            Connection.deleteMany({ 'participants.userId': userId }),
+            Notification.deleteMany({ $or: [{ toUserId: userId }, { fromUserId: userId }] }),
+            Block.deleteMany({ $or: [{ blockerId: userId }, { blockedId: userId }] }),
+            Report.deleteMany({ reporterId: userId }),
+            OtpModel.deleteMany({ email: user.email }),
+            User.updateMany(
+                { $or: [{ followers: userId }, { following: userId }] },
+                { $pull: { followers: userId, following: userId } }
+            ),
+        ]);
+        await Session.deleteMany({ userId });
+        disconnectSessions({ userId });
+        await User.deleteOne({ _id: userId });
+
+        // Former connections' chat lists reload without this user.
+        for (const peerId of peerIds) emitToUser(peerId, { type: 'badge_update' });
+
+        return res.status(200).json({ message: "Account deleted" });
     } catch (err) {
-        return serverError(res, err, 'unfollowUser failed');
+        return serverError(res, err, 'deleteAccount failed');
     }
 };

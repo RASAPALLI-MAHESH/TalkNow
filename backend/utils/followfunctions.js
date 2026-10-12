@@ -2,7 +2,10 @@ const mongoose = require('mongoose');
 const User = require('../models/user');
 const Notification = require('../models/notification');
 const Connection = require('../models/connection');
+const Block = require('../models/block');
 const { emitNotification } = require('../services/websocketServer');
+const { notifyUser } = require('../services/pushService');
+const { isBlockedEitherWay } = require('./safetyFunctions');
 const { getActorUserId, isValidObjectId } = require('./identityUtils');
 
 // Helper to normalize the input which can be in various formats
@@ -46,7 +49,8 @@ const normalizePair = (leftId, rightId) => {
 
 /**
  * How `meId` relates to each user in `otherIds`:
- * 'self', 'connected', 'requested' (I sent a request), 'incoming' (they sent me one) or 'none'.
+ * 'self', 'connected', 'requested' (I sent a request), 'incoming' (they sent me one), 'none',
+ * 'blocked' (I blocked them) or 'unavailable' (they blocked me; treat as not found).
  */
 const getRelationshipMap = async (meId, otherIds) => {
     const map = new Map();
@@ -73,6 +77,19 @@ const getRelationshipMap = async (meId, otherIds) => {
         if (c.status === 'accepted') map.set(otherId, 'connected');
         else if (c.status === 'pending') map.set(otherId, String(c.requestedBy) === me ? 'requested' : 'incoming');
     }
+
+    const others = [...pairKeyToOther.values()];
+    const blocks = await Block.find({
+        $or: [
+            { blockerId: me, blockedId: { $in: others } },
+            { blockedId: me, blockerId: { $in: others } },
+        ],
+    })
+        .select('blockerId blockedId')
+        .lean();
+    // "They blocked me" first, so "I blocked them" wins when both apply (I can still unblock).
+    for (const b of blocks) if (String(b.blockedId) === me) map.set(String(b.blockerId), 'unavailable');
+    for (const b of blocks) if (String(b.blockerId) === me) map.set(String(b.blockedId), 'blocked');
     return map;
 };
 
@@ -86,6 +103,9 @@ const followUser = async (req, res) => {
 
         const target = await User.findById(targetUserId).select('_id');
         if (!target) return res.status(404).json({ message: 'Target user not found' });
+        if (await isBlockedEitherWay(userId, targetUserId)) {
+            return res.status(403).json({ message: "You can't follow this user" });
+        }
 
         const pair = normalizePair(userId, targetUserId);
         const existingConnection = await Connection.findOne({ pairKey: pair.pairKey })
@@ -188,6 +208,11 @@ const followUser = async (req, res) => {
 
         // Emit through primary WS server
         emitNotification(targetUserId, payload);
+        notifyUser(targetUserId, {
+            title: 'New follow request',
+            body: `${payload.username} wants to connect`,
+            data: { type: 'notifications' },
+        });
 
         return res.status(200).json({
             message: 'Follow request sent',
@@ -456,6 +481,11 @@ const acceptFollowRequest = async (req, res) => {
         };
 
         emitNotification(requesterUserId, payload);
+        notifyUser(requesterUserId, {
+            title: 'Request accepted',
+            body: `${payload.username} accepted your follow request`,
+            data: { type: 'message', peerId: String(userId), peerUsername: payload.username, peerAvatar: payload.profilePicture },
+        });
 
         return res.status(200).json({
             message: 'Follow request accepted',

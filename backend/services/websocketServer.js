@@ -4,6 +4,7 @@ const Message = require('../models/message');
 const Connection = require('../models/connection');
 const User = require('../models/user');
 const { resolveAuthToken } = require('../middleware/authMiddleware');
+const { notifyUser } = require('./pushService');
 
 const AUTH_TIMEOUT_MS = 10 * 1000;
 const MAX_CONTENT_CHARS = 4000;
@@ -188,24 +189,27 @@ const attachWebSocketServer = (httpServer) => {
                     const to = toSafeId(data.to);
                     const from = ws.userId;
                     const content = String(data.content || '').trim();
+                    const clientId = data?.clientId ? String(data.clientId) : undefined;
+                    // Errors carry the client's temporary id so the app knows which message failed.
+                    const sendError = (message) => ws.send(JSON.stringify({ type: 'error', message, clientId }));
 
                     if (!isValidObjectId(to) || !isValidObjectId(from)) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'Invalid sender/recipient id' }));
+                        sendError('Invalid sender/recipient id');
                         return;
                     }
 
                     if (to === from) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'Cannot message yourself' }));
+                        sendError('Cannot message yourself');
                         return;
                     }
 
                     if (!content) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'Message content is required' }));
+                        sendError('Message content is required');
                         return;
                     }
 
                     if (content.length > MAX_CONTENT_CHARS) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'Message is too long' }));
+                        sendError('Message is too long');
                         return;
                     }
 
@@ -219,7 +223,7 @@ const attachWebSocketServer = (httpServer) => {
                         .lean();
 
                     if (!acceptedConnection?._id) {
-                        ws.send(JSON.stringify({ type: 'error', message: 'Only accepted connections can exchange messages' }));
+                        sendError('You can only message your connections');
                         return;
                     }
 
@@ -268,18 +272,23 @@ const attachWebSocketServer = (httpServer) => {
                         senderName: senderObj?.username,
                         senderAvatar: senderObj?.profilePicture,
                         content,
-                        clientId: data?.clientId ? String(data.clientId) : undefined,
+                        clientId,
                         date: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
                     };
 
                     const deliveredNow = emitToUser(to, payload);
+                    notifyUser(to, {
+                        title: senderObj?.username || 'TalkNow',
+                        body: 'New message',
+                        data: { type: 'message', peerId: from, peerUsername: senderObj?.username, peerAvatar: senderObj?.profilePicture },
+                    });
 
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({ type: 'sent', ...payload }));
                         ws.send(JSON.stringify({
                             type: 'message_status',
                             id: String(doc._id),
-                            clientId: data?.clientId ? String(data.clientId) : undefined,
+                            clientId,
                             status: 'sent',
                         }));
                     }
@@ -295,7 +304,7 @@ const attachWebSocketServer = (httpServer) => {
                             ws.send(JSON.stringify({
                                 type: 'message_status',
                                 id: String(doc._id),
-                                clientId: data?.clientId ? String(data.clientId) : undefined,
+                                clientId,
                                 status: 'delivered',
                                 date: deliveredAt.toISOString(),
                             }));
