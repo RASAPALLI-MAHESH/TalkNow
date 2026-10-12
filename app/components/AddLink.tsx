@@ -698,4 +698,8 @@ const mainStyles = StyleSheet.create({
     },
 });
 
+// Names for memo-wrapped components in React DevTools and error messages.
+LinkRow.displayName = 'LinkRow';
+AddEditSheet.displayName = 'AddEditSheet';
+
 export default memo(AddLink);

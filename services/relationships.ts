@@ -1,10 +1,11 @@
 import { Alert } from 'react-native';
-import { acceptFollowRequest, followUser, unfollowUser } from './AuthService';
+import { acceptFollowRequest, followUser, unblockUser, unfollowUser } from './AuthService';
 
 // How the signed-in user relates to another user, as reported by the server.
-export type Relationship = 'self' | 'connected' | 'requested' | 'incoming' | 'none';
+// 'blocked' means I blocked them.
+export type Relationship = 'self' | 'connected' | 'requested' | 'incoming' | 'none' | 'blocked';
 
-const RELATIONSHIPS: Relationship[] = ['self', 'connected', 'requested', 'incoming', 'none'];
+const RELATIONSHIPS: Relationship[] = ['self', 'connected', 'requested', 'incoming', 'none', 'blocked'];
 
 export const toRelationship = (value: unknown): Relationship =>
     RELATIONSHIPS.includes(value as Relationship) ? (value as Relationship) : 'none';
@@ -15,6 +16,7 @@ export const relationshipLabel: Record<Relationship, string> = {
     requested: 'Requested',
     incoming: 'Accept',
     none: 'Follow',
+    blocked: 'Unblock',
 };
 
 // Buttons that start something new get the filled style.
@@ -36,8 +38,8 @@ const confirmRemoveConnection = (username: string) =>
 
 /**
  * Runs the follow button's action for the current relationship and returns the new one:
- * follow, cancel a sent request, accept an incoming request, or remove a connection
- * (after confirming). Returns the current relationship if the user cancels.
+ * follow, cancel a sent request, accept an incoming request, remove a connection
+ * (after confirming) or unblock. Returns the current relationship if the user cancels.
  */
 export const performRelationshipAction = async (
     userId: string,
@@ -58,6 +60,9 @@ export const performRelationshipAction = async (
         case 'connected':
             if (!(await confirmRemoveConnection(username))) return current;
             await unfollowUser(userId);
+            return 'none';
+        case 'blocked':
+            await unblockUser(userId);
             return 'none';
         default:
             return current;

@@ -70,6 +70,10 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
         setUser(prev => prev ? { ...prev, ...data } : null);
     };
 
+    const signOutLocally = () => {
+        setUser(null);
+    };
+
     const value = useMemo(
         () => ({
             user,
@@ -82,6 +86,7 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
             forgotPassword,
             resetPassword,
             updateUser,
+            signOutLocally,
         }),
         [user, loading]
     );

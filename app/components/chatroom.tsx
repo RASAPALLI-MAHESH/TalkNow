@@ -21,7 +21,6 @@ import useAuth from '@/hooks/useAuth';
 import { getConversationMessages } from '@/services/AuthService';
 import { useSocketEvents, useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
-import * as SecureStore from 'expo-secure-store';
 import React, {
     useCallback,
     useEffect,
@@ -30,6 +29,7 @@ import React, {
     useState
 } from 'react';
 import {
+    Alert,
     Animated,
     FlatList,
     Keyboard,
@@ -115,21 +115,23 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const borderAnim = useRef(new Animated.Value(0)).current;
 
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    // Latest list for socket handlers that need to read it outside a state updater.
+    const messagesRef = useRef<ChatMessage[]>([]);
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
     const [loadingMore, setLoadingMore] = useState(false);
     const [oldestMessageDate, setOldestMessageDate] = useState<string | null>(null);
     const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
+    // In-memory only: messages are not written to device storage in plain text.
+    // (An encrypted on-device store comes with end-to-end encryption.)
     const writeConversationCache = useCallback((id: string, nextMessages: ChatMessage[]) => {
         if (!id) return;
         conversationCache.set(id, {
             messages: nextMessages,
             fetchedAt: Date.now(),
         });
-
-        try {
-            const toSave = nextMessages.slice(0, 30);
-            SecureStore.setItemAsync(`chat_cache_${id}`, JSON.stringify(toSave)).catch(() => { });
-        } catch (e) { }
     }, []);
 
     useEffect(() => {
@@ -150,15 +152,6 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 } else {
                     setOldestMessageDate(null);
                     setHasMoreMessages(true);
-
-                    SecureStore.getItemAsync(`chat_cache_${peerId}`).then(offlineCached => {
-                        if (offlineCached && mounted) {
-                            try {
-                                const parsed = JSON.parse(offlineCached);
-                                setMessages(prev => prev.length === 0 ? parsed : prev);
-                            } catch (e) { }
-                        }
-                    }).catch(() => { });
                 }
 
                 const res = await getConversationMessages(peerId, undefined);
@@ -195,9 +188,21 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
             if (!oldestLatest) return;
 
             // Newest first: keep older pages already loaded and messages still being sent.
+            // A "sending" message whose server copy is already in the latest page was sent
+            // just before the connection dropped (its ack was lost): drop the local copy.
             const latestIds = new Set(latest.map((m) => m.id));
+            const sentByMe = latest.filter((m) => m.sender === 'me');
+            const SEND_CLOCK_SKEW_MS = 60 * 1000;
             setMessages((prev) => {
-                const pending = prev.filter((m) => m.status === 'sending');
+                const pending = prev.filter(
+                    (m) =>
+                        m.status === 'sending' &&
+                        !sentByMe.some(
+                            (s) =>
+                                s.text === m.text &&
+                                Date.parse(s.createdAt) >= Date.parse(m.createdAt) - SEND_CLOCK_SKEW_MS
+                        )
+                );
                 const older = prev.filter(
                     (m) => m.status !== 'sending' && !latestIds.has(m.id) && m.createdAt < oldestLatest
                 );
@@ -216,6 +221,22 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
         if (type === 'registered') {
             void syncLatestMessages();
+            return;
+        }
+
+        // The server rejected one of our messages (e.g. the connection was removed).
+        if (type === 'error') {
+            const failedId = String((lastMessage as any)?.clientId ?? '');
+            const failed = messagesRef.current.find((m) => m.id === failedId);
+            if (!failedId || !failed) return;
+            setMessages((prev) => {
+                const next = prev.filter((m) => m.id !== failedId);
+                writeConversationCache(peerId, next);
+                return next;
+            });
+            // Give the text back unless the user already started typing something else.
+            setDraft((current) => (current.trim() ? current : failed.text));
+            Alert.alert('Message not sent', String((lastMessage as any)?.message ?? 'Please try again.'));
             return;
         }
 
@@ -513,17 +534,6 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 </Text>
             </RippleButton>
 
-            {/* More options — ripple */}
-            <RippleButton
-                onPress={() => { }}
-                hitSlop={12}
-                borderless
-                style={styles.headerIcon}
-                rippleColor="rgba(103,51,208,0.22)"
-                accessibilityLabel="More options"
-            >
-                <Ionicons name="ellipsis-vertical" size={20} color="#1a1a2e" />
-            </RippleButton>
         </View>
     );
 

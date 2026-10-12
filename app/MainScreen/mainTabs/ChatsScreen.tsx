@@ -47,7 +47,6 @@ const MODE_TOGGLE_PADDING = 2;
 const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
 
 const NOTIFICATIONS_LAST_SEEN_KEY = 'notificationsLastSeenAt';
-const CHATS_CACHE_KEY = 'offline_chats_inbox_v1';
 
 const CHAT_HEADER_ICON_XML = `
 <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#6733d0">
@@ -471,13 +470,8 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 unreadCount: typeof u.unreadCount === 'number' ? u.unreadCount : 0,
             }));
 
-            try {
-                if (currentUserId) {
-                    await SecureStore.setItemAsync(`${CHATS_CACHE_KEY}_${currentUserId}`, JSON.stringify(incoming));
-                }
-            } catch (e) {}
-
-            setChatRows((prev) => mergeChatsById(incoming, prev));
+            // The server's inbox is the full list: chats that were removed or blocked drop out.
+            setChatRows(mergeChatsById(incoming, []));
         } catch (err: any) {
             console.log('chat inbox hydrate error:', err?.message ?? String(err));
         }
@@ -499,19 +493,6 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             // If endpoint fails, don't show a false dot.
             setHasUnreadNotifications(false);
         }
-    }, [currentUserId]);
-
-    useEffect(() => {
-        if (!currentUserId) return;
-        SecureStore.getItemAsync(`${CHATS_CACHE_KEY}_${currentUserId}`).then(cached => {
-            if (cached) {
-                try {
-                    const parsed = JSON.parse(cached);
-                    // Fast hydrate if currently empty
-                    setChatRows(prev => prev.length === 0 ? parsed : prev);
-                } catch (e) {}
-            }
-        }).catch(() => {});
     }, [currentUserId]);
 
     useEffect(() => {

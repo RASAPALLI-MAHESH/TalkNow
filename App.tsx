@@ -4,11 +4,12 @@ import AuthProvider from "./Context/AuthProvider";
 import { UnreadProvider } from "./Context/UnreadContext";
 import { WebSocketProvider } from "./services/WebSocketClient";
 import RootNavigator from "./src/navigation/RootNavigator";
+import { navigationRef } from "./src/navigation/navigationRef";
 
 export default function App() {
     return (
         <SafeAreaProvider>
-            <NavigationContainer>
+            <NavigationContainer ref={navigationRef}>
                 <AuthProvider>
                     <WebSocketProvider>
                         <UnreadProvider>

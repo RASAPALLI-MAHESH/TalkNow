@@ -110,9 +110,41 @@ const setTokens = async (token?: string, refreshToken?: string) => {
     if (refreshToken) await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
 };
 
+// A small copy of the signed-in user, so the app can open without a network.
+const CACHED_USER_KEY = 'cachedUser';
+
+const cacheUser = async (user: unknown) => {
+    const u = (user ?? {}) as Record<string, unknown>;
+    if (!u.id) return;
+    const picture = typeof u.profilePicture === 'string' ? u.profilePicture : '';
+    const small = {
+        id: String(u.id),
+        username: typeof u.username === 'string' ? u.username : undefined,
+        Firstname: typeof u.Firstname === 'string' ? u.Firstname : undefined,
+        // SecureStore values should stay under 2 KB: keep URLs, never inline image data.
+        profilePicture: picture.length < 500 ? picture : '',
+    };
+    try {
+        await SecureStore.setItemAsync(CACHED_USER_KEY, JSON.stringify(small));
+    } catch {
+        // Caching is best-effort.
+    }
+};
+
+const readCachedUser = async (): Promise<AuthUser | null> => {
+    try {
+        const raw = await SecureStore.getItemAsync(CACHED_USER_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed?.id ? parsed : null;
+    } catch {
+        return null;
+    }
+};
+
 const clearToken = async () => {
     await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
     await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(CACHED_USER_KEY);
 };
 
 // Set by AuthProvider so a dead session also signs the user out of the UI.
@@ -227,6 +259,7 @@ client.interceptors.response.use(
 export const login = async (username: string, password: string): Promise<AuthResponse> => {
     const response = await client.post('/login', { username, password });
     await setTokens(response.data.token, response.data.refreshToken);
+    await cacheUser(response.data.user);
     return response.data;
 };
 
@@ -273,6 +306,7 @@ export const signUp = async (
         profilePicture,
     });
     await setTokens(response.data.token, response.data.refreshToken);
+    await cacheUser(response.data.user);
     return response.data;
 };
 
@@ -293,10 +327,17 @@ export const getCurrentUser = async (): Promise<AuthUser | null> => {
     // Calls the newly protected /profile endpoint
     try {
         const response = await client.get('/profile');
-        return response.data?.user ?? response.data ?? null;
+        const user = response.data?.user ?? response.data ?? null;
+        await cacheUser(user);
+        return user;
     } catch (err: any) {
         if (err?.response?.status === 401) {
             await clearToken();
+        }
+        // Offline or server unreachable: open with the cached user and let requests retry.
+        if (!err?.response) {
+            const cached = await readCachedUser();
+            if (cached) return cached;
         }
         throw err;
     }
@@ -408,14 +449,6 @@ export const getConversationMessages = async (
     return response.data;
 };
 
-export const sendMessageToUser = async (
-    toUserId: string,
-    content: string
-): Promise<{ message: unknown }> => {
-    const response = await client.post('/messages/send', { toUserId, content });
-    return response.data;
-};
-
 export type NotificationDto = {
     id: string;
     username: string;
@@ -446,6 +479,40 @@ export const deleteNotification = async (notificationId: string): Promise<{ ok: 
     return response.data;
 };
 
+export type BlockedUserDto = { id: string; username: string; profilePicture?: string };
+
+export const blockUser = async (targetUserId: string): Promise<AuthResponse> => {
+    const response = await client.post('/users/block', { targetUserId });
+    return response.data;
+};
+
+export const unblockUser = async (targetUserId: string): Promise<AuthResponse> => {
+    const response = await client.post('/users/unblock', { targetUserId });
+    return response.data;
+};
+
+export const getBlockedUsers = async (): Promise<{ users: BlockedUserDto[] }> => {
+    const response = await client.get('/users/blocked');
+    return response.data;
+};
+
+export type ReportReason = 'spam' | 'harassment' | 'inappropriate' | 'impersonation' | 'other';
+
+export const reportUser = async (targetUserId: string, reason: ReportReason, details: string): Promise<AuthResponse> => {
+    const response = await client.post('/reports', { targetUserId, reason, details });
+    return response.data;
+};
+
+export const registerPushToken = async (token: string): Promise<void> => {
+    await client.post('/push-token', { token });
+};
+
+/** Permanently deletes the account, then clears this device's tokens. */
+export const deleteAccount = async (password: string): Promise<void> => {
+    await client.delete('/account', { data: { password } });
+    await clearToken();
+};
+
 const AuthService = {
     login,
     signUp,
@@ -464,13 +531,18 @@ const AuthService = {
     getConnectionCounters,
     getChatInbox,
     getConversationMessages,
-    sendMessageToUser,
     getNotifications,
     getUnreadNotificationCount,
     getUnreadMessageCount,
     deleteNotification,
     getUserProfile,
     updateProfile,
+    blockUser,
+    unblockUser,
+    getBlockedUsers,
+    reportUser,
+    registerPushToken,
+    deleteAccount,
 };
 
 export default AuthService;

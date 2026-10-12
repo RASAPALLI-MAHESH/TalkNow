@@ -29,7 +29,6 @@ import {
     ScrollView,
     StatusBar,
     StyleSheet,
-    Switch,
     Text,
     TouchableNativeFeedback,
     TouchableOpacity,
@@ -38,6 +37,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafetyActions } from '@/app/components/SafetyActions';
 
 /* ─── Enable LayoutAnimation on Android ─── */
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -245,8 +245,15 @@ const ChatProfile = ({ navigation, route }: ChatProfileProps) => {
 
     /* Local state */
     const [imgViewerVisible, setImgViewerVisible] = useState(false);
-    const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-    const [isFavourite, setIsFavourite] = useState(false);
+    // Blocking ends the connection, so there is no chat to go back to.
+    const { openReport, block, safetySheet } = useSafetyActions({
+        userId: peerId,
+        username: peerUsername,
+        blocked: false,
+        onBlockedChange: (blocked) => {
+            if (blocked) navigation.popToTop();
+        },
+    });
 
     /* Screen enter animation */
     const screenScale   = useRef(new Animated.Value(0.94)).current;
@@ -364,9 +371,11 @@ const ChatProfile = ({ navigation, route }: ChatProfileProps) => {
                         <View style={styles.actionStrip}>
                             {[
                                 { icon: 'chatbubble-ellipses' as const, label: 'Message', onPress: () => navigation.goBack() },
-                                { icon: 'call' as const,                label: 'Call' },
-                                { icon: 'videocam' as const,            label: 'Video' },
-                                { icon: 'search' as const,              label: 'Search' },
+                                {
+                                    icon: 'person' as const,
+                                    label: 'Profile',
+                                    onPress: () => navigation.navigate('FullProfile', { peerId, peerUsername, peerAvatar }),
+                                },
                             ].map(({ icon, label, onPress }) => (
                                 <RippleButton
                                     key={label}
@@ -383,56 +392,15 @@ const ChatProfile = ({ navigation, route }: ChatProfileProps) => {
                             ))}
                         </View>
 
-                        {/* ── Media, Links section ── */}
+                        {/* ── Safety section ── */}
                         <View style={styles.section}>
-                            <RippleButton
-                                onPress={() => { }}
-                                style={styles.mediaBox}
-                                rippleColor="rgba(103,51,208,0.1)"
-                            >
-                                <View style={styles.mediaBoxInner}>
-                                    <Ionicons name="images-outline" size={22} color={PURPLE_PRIMARY} />
-                                    <Text style={styles.mediaBoxLabel}>All Media, Links & Docs</Text>
-                                </View>
-                                <Ionicons name="chevron-forward" size={16} color={INK_MUTED} />
-                            </RippleButton>
-                        </View>
-
-                        {/* ── Settings section ── */}
-                        <View style={styles.section}>
-                            <Text style={styles.sectionTitle}>Options</Text>
-
                             <SectionRow
-                                icon="notifications-outline"
-                                label="Notifications"
-                                sublabel={notificationsEnabled ? 'On' : 'Off'}
-                                onPress={() => setNotificationsEnabled(prev => !prev)}
-                                right={
-                                    <Switch
-                                        value={notificationsEnabled}
-                                        onValueChange={setNotificationsEnabled}
-                                        trackColor={{ false: '#d1d5db', true: PURPLE_PRIMARY }}
-                                        thumbColor={WHITE}
-                                    />
-                                }
-                            />
-
-                            <View style={styles.divider} />
-
-                            <SectionRow
-                                icon={isFavourite ? 'star' : 'star-outline'}
-                                label="Add to Favourites"
-                                sublabel={isFavourite ? 'Added' : 'Add this contact as favourite'}
-                                onPress={() => setIsFavourite(prev => !prev)}
-                                rippleColor="rgba(234,179,8,0.18)"
-                            />
-
-                            <View style={styles.divider} />
-
-                            <SectionRow
-                                icon="archive-outline"
-                                label="Archive Chat"
-                                sublabel="Hide from chat list"
+                                icon="flag-outline"
+                                label="Report"
+                                danger
+                                sublabel="Report this account"
+                                onPress={openReport}
+                                rippleColor="rgba(239,68,68,0.14)"
                             />
 
                             <View style={styles.divider} />
@@ -442,22 +410,15 @@ const ChatProfile = ({ navigation, route }: ChatProfileProps) => {
                                 label="Block"
                                 danger
                                 sublabel={`Block ${peerUsername}`}
-                                rippleColor="rgba(239,68,68,0.14)"
-                            />
-
-                            <View style={styles.divider} />
-
-                            <SectionRow
-                                icon="flag-outline"
-                                label="Report"
-                                danger
-                                sublabel="Report this account"
+                                onPress={block}
                                 rippleColor="rgba(239,68,68,0.14)"
                             />
                         </View>
                     </ScrollView>
                 </Animated.View>
             </SafeAreaView>
+
+            {safetySheet}
 
             {/* ── Instagram-style image viewer ── */}
             <ImageViewer
@@ -770,5 +731,10 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
 });
+
+// Names for memo-wrapped components in React DevTools and error messages.
+RippleButton.displayName = 'RippleButton';
+ImageViewer.displayName = 'ImageViewer';
+SectionRow.displayName = 'SectionRow';
 
 export default ChatProfile;

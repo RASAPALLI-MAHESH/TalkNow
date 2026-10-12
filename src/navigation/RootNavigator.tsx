@@ -1,3 +1,4 @@
+import BlockedUsers from '@/app/chatRoomScreens/BlockedUsers';
 import ChatProfile from '@/app/chatRoomScreens/chatprofile';
 import FullProfile from '@/app/chatRoomScreens/fullProfile';
 import HeroCanvas from '@/app/chatRoomScreens/HeroCanvas';
@@ -8,6 +9,7 @@ import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import HomePage from '../../app/MainScreen/tabs';
 import useAuth from '../../hooks/useAuth';
+import { usePushNotifications } from '../../services/pushNotifications';
 import AuthNavigator from './AuthNavigator';
 const Stack = createStackNavigator();
 
@@ -45,12 +47,14 @@ const MainNavigator = () => {
             <Stack.Screen name="ChatProfile" component={ChatProfile} />
             <Stack.Screen name="FullProfile" component={FullProfile} />
             <Stack.Screen name="HeroCanvas" component={HeroCanvas} />
+            <Stack.Screen name="BlockedUsers" component={BlockedUsers} />
         </Stack.Navigator>
     );
 };
 
 const RootNavigator = () => {
     const { user, loading } = useAuth();
+    usePushNotifications(!!user);
 
     if (loading) {
         return (
