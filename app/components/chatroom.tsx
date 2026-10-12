@@ -19,9 +19,8 @@ import MessageBubble from '@/app/components/messageComponent';
 import { useUnread } from '@/Context/UnreadContext';
 import useAuth from '@/hooks/useAuth';
 import { getConversationMessages } from '@/services/AuthService';
-import { useWebSocketClient } from '@/services/WebSocketClient';
+import { useSocketEvents, useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
-import * as SecureStore from 'expo-secure-store';
 import React, {
     useCallback,
     useEffect,
@@ -30,6 +29,7 @@ import React, {
     useState
 } from 'react';
 import {
+    Alert,
     Animated,
     FlatList,
     Keyboard,
@@ -67,7 +67,22 @@ type ConversationCacheItem = {
 };
 
 const CONVERSATION_CACHE_TTL_MS = 2 * 60 * 1000;
+const PAGE_SIZE = 50;
 const conversationCache = new Map<string, ConversationCacheItem>();
+
+const toChatMessage = (m: any): ChatMessage => ({
+    id: String(m?.id ?? Date.now()),
+    text: String(m?.text ?? ''),
+    sender: m?.sender === 'me' ? 'me' : 'other',
+    createdAt: String(m?.createdAt ?? new Date().toISOString()),
+    status:
+        m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent' || m?.status === 'sending'
+            ? m.status
+            : undefined,
+});
+
+// Lists are newest first (the FlatList is inverted), so the oldest message is the last one.
+const oldestOf = (list: ChatMessage[]) => (list.length > 0 ? list[list.length - 1].createdAt : null);
 
 /* ─────────────────────── Main Screen ─────────────────────── */
 
@@ -78,7 +93,7 @@ interface ChatroomProps {
 
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
-    const { lastMessage, sendMessage, markRead } = useWebSocketClient();
+    const { connected, sendMessage, markRead } = useWebSocketClient();
     const { refreshUnreadCount } = useUnread();
     const insets = useSafeAreaInsets();
 
@@ -100,21 +115,23 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const borderAnim = useRef(new Animated.Value(0)).current;
 
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    // Latest list for socket handlers that need to read it outside a state updater.
+    const messagesRef = useRef<ChatMessage[]>([]);
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
     const [loadingMore, setLoadingMore] = useState(false);
     const [oldestMessageDate, setOldestMessageDate] = useState<string | null>(null);
     const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
+    // In-memory only: messages are not written to device storage in plain text.
+    // (An encrypted on-device store comes with end-to-end encryption.)
     const writeConversationCache = useCallback((id: string, nextMessages: ChatMessage[]) => {
         if (!id) return;
         conversationCache.set(id, {
             messages: nextMessages,
             fetchedAt: Date.now(),
         });
-
-        try {
-            const toSave = nextMessages.slice(0, 30);
-            SecureStore.setItemAsync(`chat_cache_${id}`, JSON.stringify(toSave)).catch(() => { });
-        } catch (e) { }
     }, []);
 
     useEffect(() => {
@@ -130,48 +147,25 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
                 if (cacheIsFresh && cached.messages.length > 0) {
                     setMessages(cached.messages);
-                    setOldestMessageDate(cached.messages[0]?.createdAt ?? null);
-                    setHasMoreMessages(cached.messages.length >= 50);
+                    setOldestMessageDate(oldestOf(cached.messages));
+                    setHasMoreMessages(cached.messages.length >= PAGE_SIZE);
                 } else {
                     setOldestMessageDate(null);
                     setHasMoreMessages(true);
-
-                    SecureStore.getItemAsync(`chat_cache_${peerId}`).then(offlineCached => {
-                        if (offlineCached && mounted) {
-                            try {
-                                const parsed = JSON.parse(offlineCached);
-                                setMessages(prev => prev.length === 0 ? parsed : prev);
-                            } catch (e) { }
-                        }
-                    }).catch(() => { });
                 }
 
                 const res = await getConversationMessages(peerId, undefined);
                 if (!mounted) return;
 
                 const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-                const normalized: ChatMessage[] = incoming.map((m: any) => ({
-                    id: String(m?.id ?? Date.now()),
-                    text: String(m?.text ?? ''),
-                    sender: m?.sender === 'me' ? 'me' : 'other',
-                    createdAt: String(m?.createdAt ?? new Date().toISOString()),
-                    status:
-                        m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent' || m?.status === 'sending'
-                            ? m.status
-                            : undefined,
-                }));
+                const normalized: ChatMessage[] = incoming.map(toChatMessage);
 
                 setMessages(normalized);
                 writeConversationCache(peerId, normalized);
 
                 // Track oldest message for pagination
-                if (normalized.length > 0) {
-                    const oldestMsg = normalized[0];
-                    setOldestMessageDate(oldestMsg.createdAt);
-                    setHasMoreMessages(normalized.length >= 50);
-                } else {
-                    setHasMoreMessages(false);
-                }
+                setOldestMessageDate(oldestOf(normalized));
+                setHasMoreMessages(normalized.length >= PAGE_SIZE);
             } catch (err: any) {
                 console.log('conversation hydrate error:', err?.message ?? String(err));
             }
@@ -183,9 +177,68 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         };
     }, [peerId, writeConversationCache]);
 
-    useEffect(() => {
+    /* After a reconnect, merge the latest page so messages sent while offline appear. */
+    const syncLatestMessages = useCallback(async () => {
+        if (!peerId) return;
+        try {
+            const res = await getConversationMessages(peerId, undefined);
+            const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
+            const latest: ChatMessage[] = incoming.map(toChatMessage);
+            const oldestLatest = oldestOf(latest);
+            if (!oldestLatest) return;
+
+            // Newest first: keep older pages already loaded and messages still being sent.
+            // A "sending" message whose server copy is already in the latest page was sent
+            // just before the connection dropped (its ack was lost): drop the local copy.
+            const latestIds = new Set(latest.map((m) => m.id));
+            const sentByMe = latest.filter((m) => m.sender === 'me');
+            const SEND_CLOCK_SKEW_MS = 60 * 1000;
+            setMessages((prev) => {
+                const pending = prev.filter(
+                    (m) =>
+                        m.status === 'sending' &&
+                        !sentByMe.some(
+                            (s) =>
+                                s.text === m.text &&
+                                Date.parse(s.createdAt) >= Date.parse(m.createdAt) - SEND_CLOCK_SKEW_MS
+                        )
+                );
+                const older = prev.filter(
+                    (m) => m.status !== 'sending' && !latestIds.has(m.id) && m.createdAt < oldestLatest
+                );
+                const next = [...pending, ...latest, ...older];
+                writeConversationCache(peerId, next);
+                return next;
+            });
+        } catch (err: any) {
+            console.log('conversation sync error:', err?.message ?? String(err));
+        }
+    }, [peerId, writeConversationCache]);
+
+    useSocketEvents((lastMessage) => {
         const type = String((lastMessage as any)?.type ?? '');
         if (!type) return;
+
+        if (type === 'registered') {
+            void syncLatestMessages();
+            return;
+        }
+
+        // The server rejected one of our messages (e.g. the connection was removed).
+        if (type === 'error') {
+            const failedId = String((lastMessage as any)?.clientId ?? '');
+            const failed = messagesRef.current.find((m) => m.id === failedId);
+            if (!failedId || !failed) return;
+            setMessages((prev) => {
+                const next = prev.filter((m) => m.id !== failedId);
+                writeConversationCache(peerId, next);
+                return next;
+            });
+            // Give the text back unless the user already started typing something else.
+            setDraft((current) => (current.trim() ? current : failed.text));
+            Alert.alert('Message not sent', String((lastMessage as any)?.message ?? 'Please try again.'));
+            return;
+        }
 
         const from = String((lastMessage as any)?.from ?? '').trim();
         const to = String((lastMessage as any)?.to ?? '').trim();
@@ -279,23 +332,22 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         if (type === 'new_message' && from === peerId && to === currentUserId) {
             markRead(peerId, date);
         }
-    }, [lastMessage, markRead, peerId, user?.id, writeConversationCache]);
+    });
 
+    // Mark read only when a new incoming message shows up, not on every list change.
+    const lastMarkedReadIdRef = useRef<string | null>(null);
+    const latestOther = messages.find((m) => m.sender === 'other'); // messages[0] is newest
     useEffect(() => {
-        if (!peerId || messages.length === 0) return;
-
-        // Find the newest message from 'other' (messages[0] is newest in inverted list)
-        const latestOther = messages.find(m => m.sender === 'other');
-        if (!latestOther) return;
-
-        markRead(peerId, latestOther.createdAt);
+        if (!peerId || !latestOther || lastMarkedReadIdRef.current === latestOther.id) return;
+        if (!markRead(peerId, latestOther.createdAt)) return; // not connected yet; retried once `connected` flips
+        lastMarkedReadIdRef.current = latestOther.id;
 
         // Allow backend to process the markRead before fetching the new count
         const timer = setTimeout(() => {
             refreshUnreadCount();
         }, 800);
         return () => clearTimeout(timer);
-    }, [markRead, messages, peerId, refreshUnreadCount]);
+    }, [connected, markRead, latestOther, peerId, refreshUnreadCount]);
 
     const initials = useMemo(() => {
         const name = String(user?.username ?? '').trim();
@@ -353,27 +405,20 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 return;
             }
 
-            const normalized: ChatMessage[] = incoming.map((m: any) => ({
-                id: String(m?.id ?? Date.now()),
-                text: String(m?.text ?? ''),
-                sender: m?.sender === 'me' ? 'me' : 'other',
-                createdAt: String(m?.createdAt ?? new Date().toISOString()),
-            }));
+            const normalized: ChatMessage[] = incoming.map(toChatMessage);
 
             setMessages((prev) => {
-                const next = [...prev, ...normalized];
+                const known = new Set(prev.map((m) => m.id));
+                const next = [...prev, ...normalized.filter((m) => !known.has(m.id))];
                 writeConversationCache(peerId, next);
                 return next;
             });
 
-            if (normalized.length > 0) {
-                setOldestMessageDate(normalized[0].createdAt);
-            }
+            setOldestMessageDate(oldestOf(normalized));
 
-            if (normalized.length < 50) {
+            if (normalized.length < PAGE_SIZE) {
                 setHasMoreMessages(false);
             }
-
 
         } catch (err: any) {
             console.log('load more error:', err?.message ?? String(err));
@@ -416,11 +461,10 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
         const ok = sendMessage(peerId, text, clientId);
         if (!ok) {
+            // Not connected: drop the bubble and give the text back so the user can resend.
             setDraft(text);
             setMessages((prev) => {
-                const next = prev.map((m) =>
-                    m.id === clientId ? { ...m, status: 'sending' as const } : m
-                );
+                const next = prev.filter((m) => m.id !== clientId);
                 writeConversationCache(peerId, next);
                 return next;
             });
@@ -488,20 +532,8 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 <Text style={styles.headerTitle} numberOfLines={1}>
                     {peerUsername}
                 </Text>
-                <Text style={styles.headerSubtitle}>Online</Text>
             </RippleButton>
 
-            {/* More options — ripple */}
-            <RippleButton
-                onPress={() => { }}
-                hitSlop={12}
-                borderless
-                style={styles.headerIcon}
-                rippleColor="rgba(103,51,208,0.22)"
-                accessibilityLabel="More options"
-            >
-                <Ionicons name="ellipsis-vertical" size={20} color="#1a1a2e" />
-            </RippleButton>
         </View>
     );
 

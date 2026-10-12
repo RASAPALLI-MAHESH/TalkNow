@@ -128,7 +128,7 @@ const LinkRow = memo(({
     const icon = domainIcon(entry.url);
 
     const handleOpen = () => {
-        Linking.openURL(entry.url).catch(() => {});
+        if (isValidUrl(entry.url)) Linking.openURL(entry.url).catch(() => {});
     };
 
     return (
@@ -697,5 +697,9 @@ const mainStyles = StyleSheet.create({
         color: INK_MUTED,
     },
 });
+
+// Names for memo-wrapped components in React DevTools and error messages.
+LinkRow.displayName = 'LinkRow';
+AddEditSheet.displayName = 'AddEditSheet';
 
 export default memo(AddLink);

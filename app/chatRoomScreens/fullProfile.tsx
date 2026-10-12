@@ -12,14 +12,24 @@
  */
 
 import AddLink, { type LinkEntry } from '@/app/components/AddLink';
+import DeleteAccountModal from '@/app/components/DeleteAccountModal';
+import { useSafetyActions } from '@/app/components/SafetyActions';
+import { PRIVACY_POLICY_URL, TERMS_URL } from '@/services/config';
 import RippleButton from '@/app/components/RippleButton';
 import useAuth from '@/hooks/useAuth';
-import { followUser, unfollowUser, getUserProfile, updateProfile } from '@/services/AuthService';
+import { getAuthErrorMessage, getUserProfile, updateProfile } from '@/services/AuthService';
+import {
+    performRelationshipAction,
+    relationshipLabel,
+    toRelationship,
+    type Relationship,
+} from '@/services/relationships';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
+    Alert,
     Animated,
     Dimensions,
     KeyboardAvoidingView,
@@ -102,18 +112,28 @@ type FullProfileProps = {
 
 const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => {
     const insets = useSafeAreaInsets();
-    const { user: me, Logout, updateUser } = useAuth();
+    const { user: me, Logout, updateUser, signOutLocally } = useAuth();
 
     // If it's the settings tab, we are viewing our OWN profile.
     const peerId       = isSettingsTab ? String(me?.id ?? '') : String(route?.params?.peerId ?? '').trim();
     const peerUsername = isSettingsTab ? String(me?.username ?? 'Unknown') : String(route?.params?.peerUsername ?? 'Unknown').trim() || 'Unknown';
-    const peerAvatar   = isSettingsTab ? (me as any)?.avatar || '' : route?.params?.peerAvatar || '';
+    const peerAvatar   = isSettingsTab ? String(me?.profilePicture ?? '') : route?.params?.peerAvatar || '';
 
     const isSelf = isSettingsTab || me?.id === peerId;
 
     /* State */
-    const [isFollowing, setIsFollowing] = useState(false);
+    const [relationship, setRelationship] = useState<Relationship>('none');
     const [followLoading, setFollowLoading] = useState(false);
+    // The server answers 404 for deleted accounts and for people who blocked you.
+    const [unavailable, setUnavailable] = useState(false);
+    const [deleteVisible, setDeleteVisible] = useState(false);
+
+    const { openSafetyMenu, safetySheet } = useSafetyActions({
+        userId: peerId,
+        username: peerUsername,
+        blocked: relationship === 'blocked',
+        onBlockedChange: (blocked) => setRelationship(blocked ? 'blocked' : 'none'),
+    });
     const [links, setLinks] = useState<LinkEntry[]>([]);
 
     const [localPeerAvatar, setLocalPeerAvatar] = useState(peerAvatar);
@@ -127,9 +147,11 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         twitter: '',
     });
 
-    // Editable text
-    const [editName, setEditName] = useState(peerUsername.toUpperCase());
-    const [editBio, setEditBio] = useState('Bio of the user');
+    // Editable text, plus the last saved values so a blur without changes saves nothing.
+    const [editName, setEditName] = useState('');
+    const [editBio, setEditBio] = useState('');
+    const savedNameRef = useRef('');
+    const savedBioRef = useRef('');
 
     // Modals & animations
     const [imgViewerVisible, setImgViewerVisible] = useState(false);
@@ -147,26 +169,26 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     useEffect(() => {
         if (!peerId) return;
         getUserProfile(peerId).then(data => {
-            if (data.Firstname) setEditName(data.Firstname);
-            if (data.bio) setEditBio(data.bio);
+            setRelationship(toRelationship(data.relationship));
+            savedNameRef.current = String(data.Firstname ?? '');
+            savedBioRef.current = String(data.bio ?? '');
+            setEditName(savedNameRef.current);
+            setEditBio(savedBioRef.current);
             if (data.profilePicture) setLocalPeerAvatar(data.profilePicture);
             if (data.heroData) setHeroData(data.heroData);
             if (data.socialUrls) setSocialUrls(data.socialUrls);
             if (data.customLinks) setLinks(data.customLinks);
-        }).catch(console.error);
+        }).catch((err) => {
+            if (err?.response?.status === 404) setUnavailable(true);
+            else console.error(err);
+        });
     }, [peerId]);
 
-    /* Handle Return from HeroCanvas fallback */
+    /* HeroCanvas saves own edits and updates the signed-in user; show them here. */
+    const myHeroData = me?.heroData as HeroData | undefined;
     useEffect(() => {
-        if (route?.params?.updatedHeroData) {
-            const newData = route.params.updatedHeroData;
-            setHeroData(newData);
-            updateProfile({ heroData: newData }).catch(console.error);
-            updateUser({ heroData: newData });
-            // Clear the param
-            navigation.setParams({ updatedHeroData: undefined });
-        }
-    }, [route?.params?.updatedHeroData]);
+        if (isSelf && myHeroData) setHeroData(myHeroData);
+    }, [isSelf, myHeroData]);
 
     /* Animation */
     const screenScale   = useRef(new Animated.Value(0.94)).current;
@@ -190,13 +212,9 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         if (!peerId || followLoading) return;
         setFollowLoading(true);
         try {
-            if (isFollowing) {
-                await unfollowUser(peerId);
-                setIsFollowing(false);
-            } else {
-                await followUser(peerId);
-                setIsFollowing(true);
-            }
+            setRelationship(await performRelationshipAction(peerId, peerUsername, relationship));
+        } catch (err) {
+            Alert.alert('Something went wrong', getAuthErrorMessage(err, 'Please try again.'));
         } finally {
             setFollowLoading(false);
         }
@@ -213,12 +231,24 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                 allowsEditing: true,
                 aspect: [1, 1],
                 quality: 0.6,
+                base64: true,
             });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-                const uri = result.assets[0].uri;
+            const asset = result.canceled ? undefined : result.assets?.[0];
+            if (asset?.base64) {
+                // Send the image itself: a local file path can't be seen by other users.
+                const uri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+                const previous = localPeerAvatar;
                 setLocalPeerAvatar(uri);
-                updateProfile({ profilePicture: uri }).catch(console.error);
-                updateUser({ profilePicture: uri });
+                try {
+                    const response = await updateProfile({ profilePicture: uri });
+                    // Use the stored image URL the server returns.
+                    const saved = String(response?.user?.profilePicture ?? uri);
+                    setLocalPeerAvatar(saved);
+                    updateUser({ profilePicture: saved });
+                } catch (err) {
+                    setLocalPeerAvatar(previous);
+                    Alert.alert('Could not update photo', getAuthErrorMessage(err, 'Please try again.'));
+                }
             }
         } finally {
             setIsPickingAvatar(false);
@@ -243,7 +273,8 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     const handleSocialPress = (platform: SocialPlatform) => {
         const url = socialUrls[platform];
         if (url && !isSelf) {
-            Linking.openURL(url).catch(() => {});
+            // Only open web links, whatever the profile data says.
+            if (/^https?:\/\//i.test(url)) Linking.openURL(url).catch(() => {});
         } else if (isSelf) {
             setActiveSocialPlatform(platform);
             setSocialInputUrl(url || '');
@@ -261,14 +292,35 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     };
 
     const handleBlurName = () => {
-        updateProfile({ Firstname: editName }).catch(console.error);
-        updateUser({ Firstname: editName });
+        const name = editName.trim();
+        if (!name || name === savedNameRef.current) return;
+        savedNameRef.current = name;
+        updateProfile({ Firstname: name }).catch(console.error);
+        updateUser({ Firstname: name });
     };
     const handleBlurBio = () => {
-        updateProfile({ bio: editBio }).catch(console.error);
-        updateUser({ bio: editBio });
+        const bio = editBio.trim();
+        if (bio === savedBioRef.current) return;
+        savedBioRef.current = bio;
+        updateProfile({ bio }).catch(console.error);
+        updateUser({ bio });
     };
 
+
+    if (unavailable) {
+        return (
+            <SafeAreaView style={S.safe} edges={['top', 'left', 'right']}>
+                <View style={S.header}>
+                    <RippleButton onPress={() => navigation.goBack()} borderless style={S.backBtn} rippleColor="rgba(0,0,0,0.2)">
+                        <Ionicons name="arrow-back" size={26} color={INK} />
+                    </RippleButton>
+                </View>
+                <View style={S.unavailableWrap}>
+                    <Text style={S.unavailableText}>This account isn&apos;t available.</Text>
+                </View>
+            </SafeAreaView>
+        );
+    }
 
     return (
         <SafeAreaView style={S.safe} edges={isSettingsTab ? ['top', 'left', 'right'] : ['top', 'left', 'right']}>
@@ -340,8 +392,8 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                                 </>
                             ) : (
                                 <>
-                                    <Text style={S.fullName} numberOfLines={2}>{editName}</Text>
-                                    <Text style={S.bio} numberOfLines={3}>{editBio}</Text>
+                                    <Text style={S.fullName} numberOfLines={2}>{editName || peerUsername.toUpperCase()}</Text>
+                                    {!!editBio && <Text style={S.bio} numberOfLines={3}>{editBio}</Text>}
                                 </>
                             )}
                         </View>
@@ -357,16 +409,19 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                                 disabled={isSelf || followLoading}
                                 rippleColor="rgba(255,255,255,0.2)"
                             >
-                                <Text style={S.actionBtnText}>{isFollowing ? 'Following' : 'Follow Request'}</Text>
+                                <Text style={S.actionBtnText}>{relationshipLabel[isSelf ? 'self' : relationship]}</Text>
                             </RippleButton>
 
-                            <RippleButton style={S.actionBtn} rippleColor="rgba(255,255,255,0.2)">
-                                <Text style={S.actionBtnText}>Portfolio</Text>
-                            </RippleButton>
-
-                            <RippleButton style={S.actionBtn} rippleColor="rgba(255,255,255,0.2)">
-                                <Text style={S.actionBtnText}>Share</Text>
-                            </RippleButton>
+                            {!isSelf && (
+                                <RippleButton
+                                    onPress={openSafetyMenu}
+                                    style={S.moreBtn}
+                                    rippleColor="rgba(255,255,255,0.2)"
+                                    accessibilityLabel="More options"
+                                >
+                                    <Ionicons name="ellipsis-horizontal" size={20} color={WHITE} />
+                                </RippleButton>
+                            )}
                         </View>
                     )}
 
@@ -453,8 +508,48 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                         </View>
                     )}
 
+                    {/* ── Account (own profile in Settings) ── */}
+                    {isSettingsTab && (
+                        <View style={S.accountSection}>
+                            <Text style={S.accountTitle}>Account</Text>
+                            <RippleButton onPress={() => navigation.navigate('BlockedUsers')} style={S.accountRow}>
+                                <Ionicons name="hand-left-outline" size={20} color={INK} />
+                                <Text style={S.accountRowText}>Blocked accounts</Text>
+                                <Ionicons name="chevron-forward" size={16} color={INK_MUTED} />
+                            </RippleButton>
+                            {!!PRIVACY_POLICY_URL && (
+                                <RippleButton onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})} style={S.accountRow}>
+                                    <Ionicons name="shield-checkmark-outline" size={20} color={INK} />
+                                    <Text style={S.accountRowText}>Privacy policy</Text>
+                                    <Ionicons name="open-outline" size={16} color={INK_MUTED} />
+                                </RippleButton>
+                            )}
+                            {!!TERMS_URL && (
+                                <RippleButton onPress={() => Linking.openURL(TERMS_URL).catch(() => {})} style={S.accountRow}>
+                                    <Ionicons name="document-text-outline" size={20} color={INK} />
+                                    <Text style={S.accountRowText}>Terms of use</Text>
+                                    <Ionicons name="open-outline" size={16} color={INK_MUTED} />
+                                </RippleButton>
+                            )}
+                            <RippleButton onPress={() => setDeleteVisible(true)} style={S.accountRow} rippleColor="rgba(239,68,68,0.14)">
+                                <Ionicons name="trash-outline" size={20} color="#ef4444" />
+                                <Text style={[S.accountRowText, { color: '#ef4444' }]}>Delete account</Text>
+                            </RippleButton>
+                        </View>
+                    )}
+
                 </ScrollView>
             </Animated.View>
+
+            {safetySheet}
+            <DeleteAccountModal
+                visible={deleteVisible}
+                onClose={() => setDeleteVisible(false)}
+                onDeleted={() => {
+                    setDeleteVisible(false);
+                    signOutLocally();
+                }}
+            />
 
             {/* ── Fullscreen Avatar Viewer ── */}
             <Modal visible={imgViewerVisible} transparent animationType="fade" onRequestClose={() => setImgViewerVisible(false)}>
@@ -638,6 +733,49 @@ const S = StyleSheet.create({
     },
     actionBtnDisabled: {
         opacity: 0.6,
+    },
+    moreBtn: {
+        width: 48,
+        backgroundColor: NAVY,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    accountSection: {
+        marginTop: 28,
+        borderTopWidth: 1,
+        borderTopColor: SEPARATOR,
+        paddingTop: 16,
+    },
+    accountTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: INK_MUTED,
+        textTransform: 'uppercase',
+        letterSpacing: 0.6,
+        marginBottom: 4,
+    },
+    accountRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingVertical: 14,
+    },
+    accountRowText: {
+        flex: 1,
+        fontSize: 16,
+        color: INK,
+    },
+    unavailableWrap: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 32,
+    },
+    unavailableText: {
+        fontSize: 16,
+        color: INK_MUTED,
+        textAlign: 'center',
     },
     actionBtnText: {
         color: WHITE,

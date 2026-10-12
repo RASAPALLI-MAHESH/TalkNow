@@ -27,13 +27,23 @@ const userSchema = new mongoose.Schema(
             type: String,
             default: ""
         },
-        resetOtp: {
+        // Password reset code: SHA-256 hash only, with expiry, send time (for resend cooldown)
+        // and a wrong-guess counter.
+        resetOtpHash: {
             type: String,
             default: null
         },
         otpExpiry: {
             type: Date,
             default: null
+        },
+        resetOtpSentAt: {
+            type: Date,
+            default: null
+        },
+        resetOtpAttempts: {
+            type: Number,
+            default: 0
         },
 
         // Profile fields

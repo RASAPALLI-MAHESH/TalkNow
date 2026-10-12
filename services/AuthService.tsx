@@ -102,9 +102,126 @@ const normalizeAuthBaseUrl = (rawUrl: string) => {
 
 client.defaults.baseURL = normalizeAuthBaseUrl(API_URL);
 
+const ACCESS_TOKEN_KEY = 'userToken';
+const REFRESH_TOKEN_KEY = 'refreshToken';
+
+const setTokens = async (token?: string, refreshToken?: string) => {
+    if (token) await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, token);
+    if (refreshToken) await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+};
+
+// A small copy of the signed-in user, so the app can open without a network.
+const CACHED_USER_KEY = 'cachedUser';
+
+const cacheUser = async (user: unknown) => {
+    const u = (user ?? {}) as Record<string, unknown>;
+    if (!u.id) return;
+    const picture = typeof u.profilePicture === 'string' ? u.profilePicture : '';
+    const small = {
+        id: String(u.id),
+        username: typeof u.username === 'string' ? u.username : undefined,
+        Firstname: typeof u.Firstname === 'string' ? u.Firstname : undefined,
+        // SecureStore values should stay under 2 KB: keep URLs, never inline image data.
+        profilePicture: picture.length < 500 ? picture : '',
+    };
+    try {
+        await SecureStore.setItemAsync(CACHED_USER_KEY, JSON.stringify(small));
+    } catch {
+        // Caching is best-effort.
+    }
+};
+
+const readCachedUser = async (): Promise<AuthUser | null> => {
+    try {
+        const raw = await SecureStore.getItemAsync(CACHED_USER_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed?.id ? parsed : null;
+    } catch {
+        return null;
+    }
+};
+
+const clearToken = async () => {
+    await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(CACHED_USER_KEY);
+};
+
+// Set by AuthProvider so a dead session also signs the user out of the UI.
+let onUnauthorized: (() => void) | null = null;
+
+export const setUnauthorizedHandler = (handler: (() => void) | null) => {
+    onUnauthorized = handler;
+};
+
+const signOutLocally = async () => {
+    await clearToken();
+    onUnauthorized?.();
+};
+
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Swaps the refresh token for a new access token (the server also rotates the refresh token).
+ * Concurrent callers share one request: the server treats a reused refresh token as stolen.
+ * Resolves null and signs out when the session is gone; throws on network errors so an
+ * offline device keeps its tokens.
+ */
+export const refreshAccessToken = (): Promise<string | null> => {
+    if (!refreshInFlight) {
+        refreshInFlight = (async () => {
+            const refreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+            if (!refreshToken) {
+                await signOutLocally();
+                return null;
+            }
+            try {
+                // Plain axios, not `client`, so this request never goes through the interceptors below.
+                const response = await axios.post(`${client.defaults.baseURL}/refresh`, { refreshToken }, { timeout: 10000 });
+                await setTokens(response.data?.token, response.data?.refreshToken);
+                return typeof response.data?.token === 'string' ? response.data.token : null;
+            } catch (error) {
+                if (axios.isAxiosError(error) && error.response?.status === 401) {
+                    await signOutLocally();
+                    return null;
+                }
+                throw error;
+            }
+        })().finally(() => {
+            refreshInFlight = null;
+        });
+    }
+    return refreshInFlight;
+};
+
+const ACCESS_TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
+
+const accessTokenExpiresSoon = (token: string) => {
+    try {
+        const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(atob(part + '='.repeat((4 - (part.length % 4)) % 4)));
+        return typeof payload?.exp === 'number' && payload.exp * 1000 - Date.now() < ACCESS_TOKEN_REFRESH_MARGIN_MS;
+    } catch {
+        return false;
+    }
+};
+
+/** The stored access token, refreshed first if it is about to expire. Null when signed out. */
+export const getFreshAccessToken = async (): Promise<string | null> => {
+    const token = await SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
+    if (!token) return null;
+    if (!accessTokenExpiresSoon(token)) return token;
+    try {
+        return await refreshAccessToken();
+    } catch {
+        // Offline: send the current token and let the server decide.
+        return token;
+    }
+};
+
 // Request interceptor to attach JWT token to headers securely
 client.interceptors.request.use(async (config) => {
-    const token = await SecureStore.getItemAsync('userToken');
+    const token = await getFreshAccessToken();
     if (token) {
         // Axios v1 types may represent headers as AxiosHeaders; mutate in-place.
         (config.headers as any) = config.headers ?? {};
@@ -113,31 +230,36 @@ client.interceptors.request.use(async (config) => {
     return config;
 }, (error) => Promise.reject(error));
 
-const setToken = async (token?: string) => {
-    if (token) {
-        await SecureStore.setItemAsync('userToken', token);
-    }
-};
-
-const clearToken = async () => {
-    await SecureStore.deleteItemAsync('userToken');
-};
-
-// Response interceptor: if a token is rejected, clear it so the app can recover cleanly.
+// Response interceptor: on a rejected access token, refresh once and retry; sign out if the session is gone.
 client.interceptors.response.use(
     (response) => response,
     async (error) => {
         const status = error?.response?.status;
-        if (status === 401) {
-            await clearToken();
+        const config = error?.config;
+        const hadToken = !!config?.headers?.Authorization;
+        if (status !== 401 || !hadToken) return Promise.reject(error);
+
+        if (config._retriedAfterRefresh) {
+            await signOutLocally();
+            return Promise.reject(error);
         }
-        return Promise.reject(error);
+        config._retriedAfterRefresh = true;
+
+        let token: string | null;
+        try {
+            token = await refreshAccessToken();
+        } catch {
+            return Promise.reject(error);
+        }
+        if (!token) return Promise.reject(error);
+        return client(config);
     }
 );
 
 export const login = async (username: string, password: string): Promise<AuthResponse> => {
     const response = await client.post('/login', { username, password });
-    await setToken(response.data.token);
+    await setTokens(response.data.token, response.data.refreshToken);
+    await cacheUser(response.data.user);
     return response.data;
 };
 
@@ -183,7 +305,8 @@ export const signUp = async (
         otp,
         profilePicture,
     });
-    await setToken(response.data.token);
+    await setTokens(response.data.token, response.data.refreshToken);
+    await cacheUser(response.data.user);
     return response.data;
 };
 
@@ -204,10 +327,17 @@ export const getCurrentUser = async (): Promise<AuthUser | null> => {
     // Calls the newly protected /profile endpoint
     try {
         const response = await client.get('/profile');
-        return response.data?.user ?? response.data ?? null;
+        const user = response.data?.user ?? response.data ?? null;
+        await cacheUser(user);
+        return user;
     } catch (err: any) {
         if (err?.response?.status === 401) {
             await clearToken();
+        }
+        // Offline or server unreachable: open with the cached user and let requests retry.
+        if (!err?.response) {
+            const cached = await readCachedUser();
+            if (cached) return cached;
         }
         throw err;
     }
@@ -224,12 +354,13 @@ export const updateProfile = async (data: any): Promise<any> => {
 };
 
 export const logout = async (): Promise<void> => {
-    await clearToken();
     try {
+        // Must run before the token is cleared so the server can revoke this session.
         await client.post('/logout');
     } catch (e) {
         // Safe to ignore if server unreachable
     }
+    await clearToken();
 };
 
 export const followUser = async (targetUserId: string): Promise<AuthResponse> => {
@@ -318,14 +449,6 @@ export const getConversationMessages = async (
     return response.data;
 };
 
-export const sendMessageToUser = async (
-    toUserId: string,
-    content: string
-): Promise<{ message: unknown }> => {
-    const response = await client.post('/messages/send', { toUserId, content });
-    return response.data;
-};
-
 export type NotificationDto = {
     id: string;
     username: string;
@@ -356,6 +479,40 @@ export const deleteNotification = async (notificationId: string): Promise<{ ok: 
     return response.data;
 };
 
+export type BlockedUserDto = { id: string; username: string; profilePicture?: string };
+
+export const blockUser = async (targetUserId: string): Promise<AuthResponse> => {
+    const response = await client.post('/users/block', { targetUserId });
+    return response.data;
+};
+
+export const unblockUser = async (targetUserId: string): Promise<AuthResponse> => {
+    const response = await client.post('/users/unblock', { targetUserId });
+    return response.data;
+};
+
+export const getBlockedUsers = async (): Promise<{ users: BlockedUserDto[] }> => {
+    const response = await client.get('/users/blocked');
+    return response.data;
+};
+
+export type ReportReason = 'spam' | 'harassment' | 'inappropriate' | 'impersonation' | 'other';
+
+export const reportUser = async (targetUserId: string, reason: ReportReason, details: string): Promise<AuthResponse> => {
+    const response = await client.post('/reports', { targetUserId, reason, details });
+    return response.data;
+};
+
+export const registerPushToken = async (token: string): Promise<void> => {
+    await client.post('/push-token', { token });
+};
+
+/** Permanently deletes the account, then clears this device's tokens. */
+export const deleteAccount = async (password: string): Promise<void> => {
+    await client.delete('/account', { data: { password } });
+    await clearToken();
+};
+
 const AuthService = {
     login,
     signUp,
@@ -374,13 +531,18 @@ const AuthService = {
     getConnectionCounters,
     getChatInbox,
     getConversationMessages,
-    sendMessageToUser,
     getNotifications,
     getUnreadNotificationCount,
     getUnreadMessageCount,
     deleteNotification,
     getUserProfile,
     updateProfile,
+    blockUser,
+    unblockUser,
+    getBlockedUsers,
+    reportUser,
+    registerPushToken,
+    deleteAccount,
 };
 
 export default AuthService;

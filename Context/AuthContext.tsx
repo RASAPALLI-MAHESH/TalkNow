@@ -18,6 +18,8 @@ interface AuthContextType {
     forgotPassword: (email: string) => Promise<void>;
     resetPassword: (email: string, otp: string, newPassword: string) => Promise<void>;
     updateUser: (data: Partial<AuthUser>) => void;
+    // Signs out on this device only, for when the server session is already gone (e.g. account deleted).
+    signOutLocally: () => void;
 }
 
 export const AuthContext = createContext<AuthContextType | null>(null);

@@ -74,6 +74,14 @@ export const deriveWsUrl = (): string => {
     return `${wsOrigin}/ws`;
 };
 
+// Public pages the app stores require. Set them in the build environment (eas.json).
+const httpsUrlOrEmpty = (value: unknown) => {
+    const url = typeof value === 'string' ? value.trim() : '';
+    return /^https:\/\/\S+$/i.test(url) ? url : '';
+};
+export const PRIVACY_POLICY_URL = httpsUrlOrEmpty(process.env.EXPO_PUBLIC_PRIVACY_URL);
+export const TERMS_URL = httpsUrlOrEmpty(process.env.EXPO_PUBLIC_TERMS_URL);
+
 export const API_URL = getDefaultApiUrl();
 export const API_ORIGIN = normalizeApiOrigin(API_URL);
 export const WS_URL = deriveWsUrl();

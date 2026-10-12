@@ -34,7 +34,7 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 	const email = String(route?.params?.email ?? '').trim();
 	const otp = String(route?.params?.otp ?? '').trim();
 	const [avatarUri, setAvatarUri] = useState(String(route?.params?.avatarUri ?? ''));
-	const [profilePicturePayload, setProfilePicturePayload] = useState(String(route?.params?.profilePicture ?? route?.params?.avatarUri ?? ''));
+	const [profilePicturePayload, setProfilePicturePayload] = useState(String(route?.params?.profilePicture ?? ''));
 	const [username, setUsername] = useState(String(route?.params?.username ?? ''));
 	const [checking, setChecking] = useState(false);
 	const [helper, setHelper] = useState('This username will be visible across the app.');
@@ -66,7 +66,10 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 					const mimeType = typeof asset.mimeType === 'string' && asset.mimeType.length > 0 ? asset.mimeType : 'image/jpeg';
 					setProfilePicturePayload(`data:${mimeType};base64,${asset.base64}`);
 				} else {
-					setProfilePicturePayload(asset.uri);
+					// A device-local file path is useless to other users; skip the avatar instead.
+					setAvatarUri('');
+					setProfilePicturePayload('');
+					Alert.alert('Image error', 'Could not read that photo. Please pick another one.');
 				}
 			}
 		} catch (_err) {

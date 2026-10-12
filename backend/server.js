@@ -1,8 +1,10 @@
 require("dotenv").config();
 const http = require('http');
 const express = require("express");
+const mongoose = require("mongoose");
 const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
+const mediaRoutes = require("./routes/mediaRoutes");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
@@ -32,6 +34,16 @@ const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 1000, // API-wide baseline. Apply stricter limits on sensitive routes separately as needed.
     message: "Too many requests from this IP, please try again later",
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+    // Images have their own limit below: one screen can load dozens of avatars.
+    skip: (req) => req.path.startsWith('/media/'),
+});
+
+const mediaLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 3000,
     standardHeaders: true,
     legacyHeaders: false,
     validate: { xForwardedForHeader: false },
@@ -88,6 +100,7 @@ server.use(express.json({ limit: '8mb' }));
 server.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 server.use("/api/auth", authRoutes)
+server.use("/api/media", mediaLimiter, mediaRoutes)
 
 server.get(
     "/api/health", (req , res) => {
@@ -95,14 +108,43 @@ server.get(
     }
 )
 
+server.use((req, res) => {
+    res.status(404).json({ message: "Not found" });
+});
+
+// Always answer with JSON, never an HTML error page or a stack trace.
+// eslint-disable-next-line no-unused-vars
+server.use((err, req, res, next) => {
+    const status = Number(err?.status || err?.statusCode) || 500;
+    if (status === 413) return res.status(413).json({ message: "Request is too large" });
+    if (status === 400 && err?.type === 'entity.parse.failed') return res.status(400).json({ message: "Invalid JSON" });
+    if (err?.message === 'Not allowed by CORS') return res.status(403).json({ message: "Not allowed by CORS" });
+    if (status >= 500) console.error('Unhandled error:', err);
+    return res.status(status).json({ message: status >= 500 ? "Internal server error" : "Bad request" });
+});
+
 const PORT = process.env.PORT || 8080;
 const httpServer = http.createServer(server);
 
 // WebSocket server shares the same port (path: /ws)
-attachWebSocketServer(httpServer);
+const wss = attachWebSocketServer(httpServer);
 
 // Bind to 0.0.0.0 to accept connections from the local network and Render routing
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`HTTP + WS server listening on port ${PORT}`);
 });
+
+// On deploys the platform sends SIGTERM: stop accepting work, let requests finish, then exit.
+const shutdown = (signal) => {
+    console.log(`${signal} received, shutting down`);
+    for (const client of wss.clients) client.close(1012, 'Server restarting');
+    wss.close();
+    httpServer.close(async () => {
+        await mongoose.disconnect().catch(() => {});
+        process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 10 * 1000).unref();
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 

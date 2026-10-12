@@ -1,10 +1,15 @@
-import AuthService from '@/services/AuthService';
+import AuthService, { setUnauthorizedHandler } from '@/services/AuthService';
 import React, { useEffect, useMemo, useState } from 'react';
 import { AuthContext, AuthUser } from './AuthContext';
 
 const AuthProvider = ({children} : {children : React.ReactNode}) => {
     const [user, setUser] = useState<AuthUser | null>(null);
     const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        setUnauthorizedHandler(() => setUser(null));
+        return () => setUnauthorizedHandler(null);
+    }, []);
 
     useEffect(()  => {
         let isMounted = true;
@@ -65,6 +70,10 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
         setUser(prev => prev ? { ...prev, ...data } : null);
     };
 
+    const signOutLocally = () => {
+        setUser(null);
+    };
+
     const value = useMemo(
         () => ({
             user,
@@ -77,6 +86,7 @@ const AuthProvider = ({children} : {children : React.ReactNode}) => {
             forgotPassword,
             resetPassword,
             updateUser,
+            signOutLocally,
         }),
         [user, loading]
     );

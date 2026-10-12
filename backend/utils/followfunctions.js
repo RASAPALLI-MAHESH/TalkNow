@@ -2,7 +2,10 @@ const mongoose = require('mongoose');
 const User = require('../models/user');
 const Notification = require('../models/notification');
 const Connection = require('../models/connection');
+const Block = require('../models/block');
 const { emitNotification } = require('../services/websocketServer');
+const { notifyUser } = require('../services/pushService');
+const { isBlockedEitherWay } = require('./safetyFunctions');
 const { getActorUserId, isValidObjectId } = require('./identityUtils');
 
 // Helper to normalize the input which can be in various formats
@@ -44,6 +47,52 @@ const normalizePair = (leftId, rightId) => {
     };
 };
 
+/**
+ * How `meId` relates to each user in `otherIds`:
+ * 'self', 'connected', 'requested' (I sent a request), 'incoming' (they sent me one), 'none',
+ * 'blocked' (I blocked them) or 'unavailable' (they blocked me; treat as not found).
+ */
+const getRelationshipMap = async (meId, otherIds) => {
+    const map = new Map();
+    const me = String(meId || '').trim();
+    const ids = [...new Set(otherIds.map((id) => String(id || '').trim()))].filter(isValidObjectId);
+    if (!isValidObjectId(me) || ids.length === 0) return map;
+
+    const pairKeyToOther = new Map();
+    for (const id of ids) {
+        if (id === me) {
+            map.set(id, 'self');
+            continue;
+        }
+        pairKeyToOther.set(normalizePair(me, id).pairKey, id);
+        map.set(id, 'none');
+    }
+
+    const connections = await Connection.find({ pairKey: { $in: [...pairKeyToOther.keys()] } })
+        .select('pairKey status requestedBy')
+        .lean();
+    for (const c of connections) {
+        const otherId = pairKeyToOther.get(c.pairKey);
+        if (!otherId) continue;
+        if (c.status === 'accepted') map.set(otherId, 'connected');
+        else if (c.status === 'pending') map.set(otherId, String(c.requestedBy) === me ? 'requested' : 'incoming');
+    }
+
+    const others = [...pairKeyToOther.values()];
+    const blocks = await Block.find({
+        $or: [
+            { blockerId: me, blockedId: { $in: others } },
+            { blockedId: me, blockerId: { $in: others } },
+        ],
+    })
+        .select('blockerId blockedId')
+        .lean();
+    // "They blocked me" first, so "I blocked them" wins when both apply (I can still unblock).
+    for (const b of blocks) if (String(b.blockedId) === me) map.set(String(b.blockerId), 'unavailable');
+    for (const b of blocks) if (String(b.blockerId) === me) map.set(String(b.blockedId), 'blocked');
+    return map;
+};
+
 const followUser = async (req, res) => {
     try {
         const userId = getActorUserId(req);
@@ -54,6 +103,9 @@ const followUser = async (req, res) => {
 
         const target = await User.findById(targetUserId).select('_id');
         if (!target) return res.status(404).json({ message: 'Target user not found' });
+        if (await isBlockedEitherWay(userId, targetUserId)) {
+            return res.status(403).json({ message: "You can't follow this user" });
+        }
 
         const pair = normalizePair(userId, targetUserId);
         const existingConnection = await Connection.findOne({ pairKey: pair.pairKey })
@@ -61,14 +113,17 @@ const followUser = async (req, res) => {
             .lean();
 
         if (existingConnection?.status === 'accepted') {
-            return res.status(200).json({ message: 'Already connected' });
+            return res.status(200).json({ message: 'Already connected', relationship: 'connected' });
         }
 
-        if (
-            existingConnection?.status === 'pending' &&
-            String(existingConnection?.requestedBy || '') === String(userId)
-        ) {
-            return res.status(200).json({ message: 'Follow request already sent' });
+        if (existingConnection?.status === 'pending') {
+            // Their pending request must be accepted, not overwritten by a request in the other direction.
+            const theyRequested = String(existingConnection?.requestedBy || '') !== String(userId);
+            return res.status(200).json(
+                theyRequested
+                    ? { message: 'This user already sent you a request', relationship: 'incoming' }
+                    : { message: 'Follow request already sent', relationship: 'requested' }
+            );
         }
 
         // Follow flow is request-based. Persist/emit only a follow_request notification.
@@ -84,6 +139,7 @@ const followUser = async (req, res) => {
             return res.status(200).json({
                 message: 'Follow request already sent',
                 requestId: String(existingPending._id),
+                relationship: 'requested',
             });
         }
 
@@ -136,6 +192,7 @@ const followUser = async (req, res) => {
             return res.status(200).json({
                 message: 'Follow request already sent',
                 requestId: existing?._id ? String(existing._id) : undefined,
+                relationship: 'requested',
             });
         }
 
@@ -151,10 +208,16 @@ const followUser = async (req, res) => {
 
         // Emit through primary WS server
         emitNotification(targetUserId, payload);
+        notifyUser(targetUserId, {
+            title: 'New follow request',
+            body: `${payload.username} wants to connect`,
+            data: { type: 'notifications' },
+        });
 
         return res.status(200).json({
             message: 'Follow request sent',
             requestId: String(doc._id),
+            relationship: 'requested',
         });
     } catch (err) {
         console.error('Error following user:', err);
@@ -176,10 +239,20 @@ const unfollowUser = async (req, res) => {
         const session = await mongoose.startSession();
         let actor;
         let doc;
+        let wasConnected = false;
         const message = 'removed connection';
 
         try {
             await session.withTransaction(async () => {
+                // The callback can be retried, so reset what it sets.
+                actor = undefined;
+                doc = undefined;
+                const existing = await Connection.findOne({ pairKey: normalizePair(userId, targetUserId).pairKey })
+                    .select('status')
+                    .session(session)
+                    .lean();
+                wasConnected = existing?.status === 'accepted';
+
                 await User.findByIdAndUpdate(userId, { $pull: { following: targetUserId } }, { session });
                 await User.findByIdAndUpdate(targetUserId, { $pull: { followers: userId } }, { session });
                 await User.findByIdAndUpdate(userId, { $pull: { followers: targetUserId } }, { session });
@@ -197,6 +270,10 @@ const unfollowUser = async (req, res) => {
                     },
                     { session }
                 );
+
+                // Only an actual removed connection is announced; cancelling a request
+                // (or calling this with no relationship at all) notifies no one.
+                if (!wasConnected) return;
 
                 actor = await User.findById(userId).select('_id username profilePicture').session(session).lean();
                 const created = await Notification.create(
@@ -218,18 +295,22 @@ const unfollowUser = async (req, res) => {
             await session.endSession();
         }
 
-        const payload = {
-            id: String(doc._id),
-            username: toSafeUsername(actor?.username),
-            profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
-            message,
-            fromUserId: String(userId),
-            createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
-        };
+        if (doc) {
+            emitNotification(targetUserId, {
+                type: 'unfollow',
+                id: String(doc._id),
+                username: toSafeUsername(actor?.username),
+                profilePicture: actor?.profilePicture ? String(actor.profilePicture) : '',
+                message,
+                fromUserId: String(userId),
+                createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
+            });
+        }
 
-        emitNotification(targetUserId, payload);
-
-        return res.status(200).json({ message: 'Connection removed' });
+        return res.status(200).json({
+            message: wasConnected ? 'Connection removed' : 'Follow request cancelled',
+            relationship: 'none',
+        });
     } catch (err) {
         console.error('Error unfollowing user:', err);
         return res.status(500).json({ message: 'Internal server error' });
@@ -400,6 +481,11 @@ const acceptFollowRequest = async (req, res) => {
         };
 
         emitNotification(requesterUserId, payload);
+        notifyUser(requesterUserId, {
+            title: 'Request accepted',
+            body: `${payload.username} accepted your follow request`,
+            data: { type: 'message', peerId: String(userId), peerUsername: payload.username, peerAvatar: payload.profilePicture },
+        });
 
         return res.status(200).json({
             message: 'Follow request accepted',
@@ -604,5 +690,6 @@ module.exports = {
     acceptFollowRequest,
     rejectFollowRequest,
     getMutualConnections,
+    getRelationshipMap,
 };
 

@@ -30,7 +30,7 @@ const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
         try {
             setLoading(true);
             await forgotPassword(trimmedEmail); // Passed as email to trigger API
-            Alert.alert("Success", "OTP sent to your email.");
+            Alert.alert("Check your email", "If an account exists for this email, we've sent a code.");
             // We pass the email to next screen so the user can use it alongside OTP
             navigation.navigate("changePassword", { email: trimmedEmail });
         } catch (error: any) {

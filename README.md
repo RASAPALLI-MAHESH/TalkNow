@@ -26,6 +26,27 @@ This repo includes an Express + MongoDB backend in `backend/`.
 - `JWT_SECRET` (required in production; used to sign/verify auth tokens)
 - `BREVO_API_KEY` (required to send OTP emails)
 - `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` (optional)
+- `PUBLIC_BASE_URL` (optional; public origin used in image URLs, defaults to the request's host)
+- `REPORTS_EMAIL` (recommended; user reports are emailed here so they can be reviewed quickly)
+- `EXPO_ACCESS_TOKEN` (optional; only if push security is enabled for the Expo project)
+- `CORS_ORIGINS` (optional; comma-separated browser origins allowed in production; the mobile app doesn't need it)
+
+### App build settings
+
+Set these in `eas.json` (`build.<profile>.env`):
+
+- `EXPO_PUBLIC_API_URL`: the API origin, e.g. `https://talknow-nd2i.onrender.com`
+- `EXPO_PUBLIC_PRIVACY_URL` and `EXPO_PUBLIC_TERMS_URL`: public `https://` pages for the privacy policy and terms of use. The app stores require both; they are linked from signup and Settings.
+
+Push notifications need, once per project: an Apple Push key (EAS sets it up during `eas build` for iOS) and FCM V1 credentials for Android (`eas credentials`, plus `google-services.json` referenced from `android.googleServicesFile` in `app.json`). Without them the app works but no pushes arrive.
+
+### Images
+
+Avatars and hero backgrounds are stored in the `media` collection and served from `GET /api/media/:id`; profiles store only the URL. To move images saved inside user documents by older versions, run once:
+
+```bash
+PUBLIC_BASE_URL=https://<your-api-host> MONGO_URI=<uri> npm run migrate:images
+```
 
 ### Pointing the app to the API
 
@@ -60,6 +81,10 @@ Or equivalently:
 node server.js
 ```
 
+### End-to-end tests
+
+`npm run test:e2e` boots the backend against a throwaway database and checks auth, sessions, refresh tokens, the WebSocket, images, block/report, push payloads, account deletion and rate limits. Point `TEST_MONGO_URL` at a MongoDB you can write to (default `mongodb://127.0.0.1:27017`); the test database is dropped at the end.
+
 ### Testing password reset locally
 
 If you want to test the forgot/reset password flow without waiting for email delivery, you can run:
@@ -68,7 +93,7 @@ If you want to test the forgot/reset password flow without waiting for email del
 node test-password-reset.js <email> <newPassword> [apiBase]
 ```
 
-This calls the HTTP endpoints and reads the generated OTP from MongoDB for local testing.
+This calls the HTTP endpoints and asks for the code. Codes are stored hashed, so take it from the email, or from the backend log when `BREVO_API_KEY` is not set.
 
 In the output, you'll find options to open the app in a
 
@@ -78,16 +103,6 @@ In the output, you'll find options to open the app in a
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
 You can start developing by editing the files inside the **app** directory. This project uses React Navigation.
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
 ## Learn more
 

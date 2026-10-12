@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import useAuth from '../hooks/useAuth';
 import AuthService from '../services/AuthService';
 
@@ -18,23 +18,31 @@ export const UnreadProvider = ({ children }: { children: React.ReactNode }) => {
     const { user } = useAuth();
     const [totalUnread, setTotalUnread] = useState(0);
 
-    const refreshUnreadCount = () => {
-        if (!user) return;
+    const signedIn = !!user;
+
+    // Stable identity: screens list it in effect dependencies.
+    const refreshUnreadCount = useCallback(() => {
+        if (!signedIn) return;
         AuthService.getUnreadMessageCount()
             .then(res => setTotalUnread(res.totalUnread || 0))
             .catch(err => console.error('Failed to fetch unread count', err));
-    };
+    }, [signedIn]);
 
     useEffect(() => {
-        if (!user) {
+        if (!signedIn) {
             setTotalUnread(0);
             return;
         }
         refreshUnreadCount();
-    }, [user]);
+    }, [signedIn, refreshUnreadCount]);
+
+    const value = useMemo(
+        () => ({ totalUnread, setTotalUnread, refreshUnreadCount }),
+        [totalUnread, refreshUnreadCount]
+    );
 
     return (
-        <UnreadContext.Provider value={{ totalUnread, setTotalUnread, refreshUnreadCount }}>
+        <UnreadContext.Provider value={value}>
             {children}
         </UnreadContext.Provider>
     );

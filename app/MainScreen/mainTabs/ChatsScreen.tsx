@@ -3,14 +3,20 @@ import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/compo
 import RippleButton from '@/app/components/RippleButton';
 import useAuth from '@/hooks/useAuth';
 import {
-    followUser,
     getAuthErrorMessage,
     getChatInbox,
+    getFreshAccessToken,
     getUnreadNotificationCount,
-    unfollowUser,
     type ChatInboxDto,
 } from '@/services/AuthService';
-import { useWebSocketClient } from '@/services/WebSocketClient';
+import {
+    isPrimaryRelationshipAction,
+    performRelationshipAction,
+    relationshipLabel,
+    toRelationship,
+    type Relationship,
+} from '@/services/relationships';
+import { useSocketEvents } from '@/services/WebSocketClient';
 import { useUnread } from '@/Context/UnreadContext';
 import { API_ORIGIN } from '@/services/config';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,7 +47,6 @@ const MODE_TOGGLE_PADDING = 2;
 const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
 
 const NOTIFICATIONS_LAST_SEEN_KEY = 'notificationsLastSeenAt';
-const CHATS_CACHE_KEY = 'offline_chats_inbox_v1';
 
 const CHAT_HEADER_ICON_XML = `
 <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#6733d0">
@@ -61,6 +66,7 @@ type GlobalUserSearchResult = {
     _id?: unknown;
     username?: string;
     profilePicture?: string;
+    relationship?: string;
 };
 
 const MONGO_OBJECT_ID_RE = /^[a-f\d]{24}$/i;
@@ -415,7 +421,6 @@ const GlobalChatRow = ({
 };
 
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
-    const { lastMessage } = useWebSocketClient();
     const { refreshUnreadCount } = useUnread();
 
     const { user } = useAuth();
@@ -432,7 +437,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const [globalResults, setGlobalResults] = useState<GlobalUserSearchResult[]>([]);
     const [showingGlobal, setShowingGlobal] = useState(false);
 
-    const [followingById, setFollowingById] = useState<Record<string, boolean>>({});
+    const [relationshipById, setRelationshipById] = useState<Record<string, Relationship>>({});
     const [followPendingById, setFollowPendingById] = useState<Record<string, boolean>>({});
     const [chatRows, setChatRows] = useState<ChatListItem[]>(ChatBar);
 
@@ -465,13 +470,8 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 unreadCount: typeof u.unreadCount === 'number' ? u.unreadCount : 0,
             }));
 
-            try {
-                if (currentUserId) {
-                    await SecureStore.setItemAsync(`${CHATS_CACHE_KEY}_${currentUserId}`, JSON.stringify(incoming));
-                }
-            } catch (e) {}
-
-            setChatRows((prev) => mergeChatsById(incoming, prev));
+            // The server's inbox is the full list: chats that were removed or blocked drop out.
+            setChatRows(mergeChatsById(incoming, []));
         } catch (err: any) {
             console.log('chat inbox hydrate error:', err?.message ?? String(err));
         }
@@ -493,19 +493,6 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             // If endpoint fails, don't show a false dot.
             setHasUnreadNotifications(false);
         }
-    }, [currentUserId]);
-
-    useEffect(() => {
-        if (!currentUserId) return;
-        SecureStore.getItemAsync(`${CHATS_CACHE_KEY}_${currentUserId}`).then(cached => {
-            if (cached) {
-                try {
-                    const parsed = JSON.parse(cached);
-                    // Fast hydrate if currently empty
-                    setChatRows(prev => prev.length === 0 ? parsed : prev);
-                } catch (e) {}
-            }
-        }).catch(() => {});
     }, [currentUserId]);
 
     useEffect(() => {
@@ -541,9 +528,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         };
     }, [navigation, checkUnreadNotifications, loadChatsFromInbox, refreshUnreadCount]);
 
-    useEffect(() => {
+    useSocketEvents((lastMessage) => {
         const type = String((lastMessage as any)?.type ?? '');
-        if (type === 'badge_update') {
+        // After a (re)connect, catch up on anything missed while offline.
+        if (type === 'badge_update' || type === 'registered') {
             refreshUnreadCount();
             void loadChatsFromInbox();
             return;
@@ -593,7 +581,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             };
             return mergeChatsById([], updated);
         });
-    }, [lastMessage, currentUserId]);
+    });
 
     useEffect(() => {
         Animated.timing(modeAnim, {
@@ -636,7 +624,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         setGlobalError(null);
 
         try {
-            const token = await SecureStore.getItemAsync('userToken');
+            const token = await getFreshAccessToken();
             const url = `${apiOrigin}/api/auth/search-users?query=${encodeURIComponent(q)}`;
 
             const headers: Record<string, string> = {
@@ -687,6 +675,15 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                         : '',
             }));
             setGlobalResults(sanitized);
+            // Start each row from the server's view of the relationship.
+            setRelationshipById((prev) => {
+                const next = { ...prev };
+                for (const u of users) {
+                    const id = pickValidUserId(u);
+                    if (id) next[id] = toRelationship(u?.relationship);
+                }
+                return next;
+            });
         } catch (err: any) {
             setGlobalResults([]);
             setGlobalError(typeof err?.message === 'string' ? err.message : 'Search failed.');
@@ -732,10 +729,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         });
     }, [globalResults]);
 
-    const isFollowing = (targetUserId: string) => !!followingById[targetUserId];
+    const relationshipOf = (targetUserId: string): Relationship => relationshipById[targetUserId] ?? 'none';
     const isPending = (targetUserId: string) => !!followPendingById[targetUserId];
 
-    const toggleFollow = async (targetUserId: string) => {
+    const runRelationshipAction = async (targetUserId: string, username: string) => {
         if (!targetUserId) return;
         if (!currentUserId) {
             setGlobalError('Please login to follow users.');
@@ -744,20 +741,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         if (targetUserId === currentUserId) return;
         if (isPending(targetUserId)) return;
 
-        const nextFollowing = !isFollowing(targetUserId);
-
         setFollowPendingById((prev) => ({ ...prev, [targetUserId]: true }));
-        setFollowingById((prev) => ({ ...prev, [targetUserId]: nextFollowing }));
-
         try {
-            if (nextFollowing) {
-                await followUser(targetUserId);
-
-            } else {
-                await unfollowUser(targetUserId);
-            }
+            const next = await performRelationshipAction(targetUserId, username, relationshipOf(targetUserId));
+            setRelationshipById((prev) => ({ ...prev, [targetUserId]: next }));
+            if (next === 'connected') void loadChatsFromInbox();
         } catch (err) {
-            setFollowingById((prev) => ({ ...prev, [targetUserId]: !nextFollowing }));
             setGlobalError(getAuthErrorMessage(err, 'Failed to update follow status.'));
         } finally {
             setFollowPendingById((prev) => ({ ...prev, [targetUserId]: false }));
@@ -814,16 +803,16 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const renderGlobalItem = ({ item }: { item: GlobalChatListItem }) => {
         const targetUserId = String(item.id ?? '').trim();
         const pending = targetUserId ? isPending(targetUserId) : false;
-        const following = targetUserId ? isFollowing(targetUserId) : false;
+        const relationship = targetUserId ? relationshipOf(targetUserId) : 'none';
 
         const action: ChatRowAction = {
-            label: following ? 'Following' : 'Follow',
+            label: relationshipLabel[relationship],
             onPress: () => {
-                void toggleFollow(targetUserId);
+                void runRelationshipAction(targetUserId, item.name);
             },
             disabled: pending || !targetUserId || !currentUserId || targetUserId === currentUserId,
-            variant: following ? 'ghost' : 'primary',
-            loading: false,
+            variant: isPrimaryRelationshipAction(relationship) ? 'primary' : 'ghost',
+            loading: pending,
         };
 
         return <GlobalChatRow item={item} action={action} />;
@@ -1070,7 +1059,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     data={globalAsChatRows}
                     keyExtractor={(item, index) => (item.id ? String(item.id) : `missing-id-${index}`)}
                     renderItem={renderGlobalItem}
-                    extraData={{ followingById, followPendingById, currentUserId }}
+                    extraData={{ relationshipById, followPendingById, currentUserId }}
                     style={styles.list}
                     contentContainerStyle={styles.listContent}
                     keyboardShouldPersistTaps="handled"

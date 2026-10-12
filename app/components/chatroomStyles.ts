@@ -110,13 +110,6 @@ export const styles = StyleSheet.create({
         fontFamily: FONT_MEDIUM,
     },
 
-    headerSubtitle: {
-        fontSize: 11,
-        color: '#22c55e',
-        fontFamily: FONT_REGULAR,
-        marginTop: 1,
-    },
-
     pressed: {
         opacity: 0.6,
     },

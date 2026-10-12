@@ -1,11 +1,13 @@
 import useAuth from "@/hooks/useAuth";
 import { getAuthErrorMessage } from "@/services/AuthService";
+import { PRIVACY_POLICY_URL, TERMS_URL } from "@/services/config";
 import { useState } from "react";
 import {
     ActivityIndicator,
     Alert,
     Keyboard,
     KeyboardAvoidingView,
+    Linking,
     Platform,
     Pressable,
     ScrollView,
@@ -94,6 +96,15 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
                             <Text style={authStyles.buttonText}>Verify Email</Text>
                         )}
                     </Pressable>
+
+                    {/* The app stores require users to accept the terms before using a chat app. */}
+                    <Text style={[authStyles.bottomText, { marginTop: 16, textAlign: 'center' }]}>
+                        By continuing, you agree to TalkNow&apos;s{' '}
+                        <Text style={authStyles.link} onPress={() => TERMS_URL && Linking.openURL(TERMS_URL).catch(() => {})}>Terms of Use</Text>
+                        {' '}and{' '}
+                        <Text style={authStyles.link} onPress={() => PRIVACY_POLICY_URL && Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})}>Privacy Policy</Text>
+                        . There is no tolerance for abusive content or users.
+                    </Text>
 
                     <View style={authStyles.bottomTextContainer}>
                         <Text style={authStyles.bottomText}>
