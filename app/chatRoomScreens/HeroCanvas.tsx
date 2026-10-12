@@ -6,6 +6,8 @@
  */
 
 import RippleButton from '@/app/components/RippleButton';
+import useAuth from '@/hooks/useAuth';
+import { getAuthErrorMessage, updateProfile } from '@/services/AuthService';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
@@ -55,6 +57,8 @@ const HeroCanvas = ({ navigation, route }: any) => {
         themeId: 't1',
     };
 
+    const { updateUser } = useAuth();
+    const [saving, setSaving] = useState(false);
     const [text, setText] = useState(initialData.text);
     const [selectedThemeId, setSelectedThemeId] = useState(initialData.themeId);
     const [customImageUri, setCustomImageUri] = useState<string | undefined>(initialData.customImageUri);
@@ -93,18 +97,22 @@ const HeroCanvas = ({ navigation, route }: any) => {
         setCustomImageUri(undefined);
     };
 
-    const handleSave = () => {
-        const newData = {
-            text,
-            themeId: selectedThemeId,
-            customImageUri,
-        };
-        // Pass data back using React Navigation merge params
-        navigation.navigate({
-            name: 'FullProfile',
-            params: { updatedHeroData: newData },
-            merge: true
-        });
+    // Save here and go back to whichever screen opened the editor (Settings tab or a profile).
+    const handleSave = async () => {
+        if (saving) return;
+        setSaving(true);
+        try {
+            const response = await updateProfile({
+                heroData: { text, themeId: selectedThemeId, customImageUri: customImageUri ?? '' },
+            });
+            // The server returns the stored image URL in place of the picked image data.
+            if (response?.user?.heroData) updateUser({ heroData: response.user.heroData });
+            navigation.goBack();
+        } catch (err) {
+            Alert.alert('Could not save', getAuthErrorMessage(err, 'Please try again.'));
+        } finally {
+            setSaving(false);
+        }
     };
 
     const textColor = customImageUri ? '#ffffff' : activeTheme.textColor;
@@ -118,8 +126,8 @@ const HeroCanvas = ({ navigation, route }: any) => {
                 <RippleButton onPress={() => navigation.goBack()} borderless style={S.headerBtn}>
                     <Ionicons name="close" size={28} color="#fff" />
                 </RippleButton>
-                <RippleButton onPress={handleSave} style={S.doneBtn}>
-                    <Text style={S.doneText}>Done</Text>
+                <RippleButton onPress={handleSave} disabled={saving} style={S.doneBtn}>
+                    {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={S.doneText}>Done</Text>}
                 </RippleButton>
             </View>
 

@@ -20,6 +20,7 @@ const {
     acceptFollowRequest,
     rejectFollowRequest,
     getMutualConnections,
+    getRelationshipMap,
 } = require("../utils/followfunctions");
 const {
     getInbox,
@@ -28,7 +29,8 @@ const {
     getConnectionCounters,
 } = require('../utils/chatFunctions');
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
-const { markAsDelivered, markAsRead, getInbox: getMessageServiceInbox, getTotalUnread, recomputeUnread } = require('../services/messageService');
+const { markAsRead, getTotalUnread } = require('../services/messageService');
+const { isValidObjectId } = require("../utils/identityUtils");
 // Signup Flow
 router.post("/send-signup-otp", credentialLimiter, authController.sendSignupOtp);
 router.post("/verify-signup-otp", credentialLimiter, authController.verifySignupOtp);
@@ -60,9 +62,9 @@ router.get('/messages/with/:peerId', authMiddleware, getConversationMessages);
 router.post('/messages/send', authMiddleware, sendMessage);
 router.post('/messages/read', authMiddleware, async (req, res) => {
     try {
-        const { conversationId } = req.body;
-        if (!conversationId) return res.status(400).json({ message: 'conversationId is required' });
-        await markAsRead({ conversationId, userId: req.user._id });
+        const conversationId = String(req.body?.conversationId ?? '');
+        if (!isValidObjectId(conversationId)) return res.status(400).json({ message: 'conversationId is required' });
+        await markAsRead({ conversationId, userId: req.user.id });
         res.status(200).json({ message: 'Marked as read' });
     } catch (err) {
         console.error('Error marking as read:', err);
@@ -74,7 +76,7 @@ router.get("/notifications/unread-count", authMiddleware, getUnreadCount);
 router.delete("/notifications/:id", authMiddleware, deleteNotification);
 router.get("/messages/unread-count", authMiddleware, async (req, res) => {
     try {
-        const totalUnread = await getTotalUnread(req.user._id);
+        const totalUnread = await getTotalUnread(req.user.id);
         res.json({ totalUnread });
     } catch (err) {
         console.error("Error fetching unread message count:", err);
@@ -89,7 +91,8 @@ router.get("/search-users", authMiddleware, async (req, res) => {
         }
 
         const users = await searchUsers(query, { limit: 20 });
-        res.json({ users });
+        const relationships = await getRelationshipMap(req.user.id, users.map((u) => u.id));
+        res.json({ users: users.map((u) => ({ ...u, relationship: relationships.get(u.id) ?? 'none' })) });
     }
     catch(err){
         console.error("Error searching users:", err);
@@ -97,9 +100,4 @@ router.get("/search-users", authMiddleware, async (req, res) => {
     }
 
 });
-router.post('/' , authMiddleware , async(req , res) => {
-    const inbox = await getMessageServiceInbox(req.user._id);
-    const totalUnread = await getTotalUnread(req.user._id);
-    res.json({ inbox , totalUnread });
-})
 module.exports = router;

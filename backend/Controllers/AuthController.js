@@ -13,6 +13,7 @@ const {
     commitImageInput,
     deleteReplacedImage,
 } = require("../services/mediaStore");
+const { getRelationshipMap } = require("../utils/followfunctions");
 const mongoose = require('mongoose');
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -511,9 +512,12 @@ exports.getUserProfile = async (req, res) => {
         if(!existingUser){
             return res.status(404).json({message: "User not found"});
         }
+        const relationships = await getRelationshipMap(req.user.id, [userId]);
+
         // Public profile: email is intentionally left out.
         res.status(200).json({
             id: existingUser._id,
+            relationship: relationships.get(userId) ?? 'none',
             username: existingUser.username,
             Firstname: existingUser.Firstname,
             profilePicture: existingUser.profilePicture,

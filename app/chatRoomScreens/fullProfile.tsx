@@ -14,12 +14,19 @@
 import AddLink, { type LinkEntry } from '@/app/components/AddLink';
 import RippleButton from '@/app/components/RippleButton';
 import useAuth from '@/hooks/useAuth';
-import { followUser, unfollowUser, getUserProfile, updateProfile } from '@/services/AuthService';
+import { getAuthErrorMessage, getUserProfile, updateProfile } from '@/services/AuthService';
+import {
+    performRelationshipAction,
+    relationshipLabel,
+    toRelationship,
+    type Relationship,
+} from '@/services/relationships';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
+    Alert,
     Animated,
     Dimensions,
     KeyboardAvoidingView,
@@ -107,12 +114,12 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     // If it's the settings tab, we are viewing our OWN profile.
     const peerId       = isSettingsTab ? String(me?.id ?? '') : String(route?.params?.peerId ?? '').trim();
     const peerUsername = isSettingsTab ? String(me?.username ?? 'Unknown') : String(route?.params?.peerUsername ?? 'Unknown').trim() || 'Unknown';
-    const peerAvatar   = isSettingsTab ? (me as any)?.avatar || '' : route?.params?.peerAvatar || '';
+    const peerAvatar   = isSettingsTab ? String(me?.profilePicture ?? '') : route?.params?.peerAvatar || '';
 
     const isSelf = isSettingsTab || me?.id === peerId;
 
     /* State */
-    const [isFollowing, setIsFollowing] = useState(false);
+    const [relationship, setRelationship] = useState<Relationship>('none');
     const [followLoading, setFollowLoading] = useState(false);
     const [links, setLinks] = useState<LinkEntry[]>([]);
 
@@ -127,9 +134,11 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         twitter: '',
     });
 
-    // Editable text
-    const [editName, setEditName] = useState(peerUsername.toUpperCase());
-    const [editBio, setEditBio] = useState('Bio of the user');
+    // Editable text, plus the last saved values so a blur without changes saves nothing.
+    const [editName, setEditName] = useState('');
+    const [editBio, setEditBio] = useState('');
+    const savedNameRef = useRef('');
+    const savedBioRef = useRef('');
 
     // Modals & animations
     const [imgViewerVisible, setImgViewerVisible] = useState(false);
@@ -147,8 +156,11 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     useEffect(() => {
         if (!peerId) return;
         getUserProfile(peerId).then(data => {
-            if (data.Firstname) setEditName(data.Firstname);
-            if (data.bio) setEditBio(data.bio);
+            setRelationship(toRelationship(data.relationship));
+            savedNameRef.current = String(data.Firstname ?? '');
+            savedBioRef.current = String(data.bio ?? '');
+            setEditName(savedNameRef.current);
+            setEditBio(savedBioRef.current);
             if (data.profilePicture) setLocalPeerAvatar(data.profilePicture);
             if (data.heroData) setHeroData(data.heroData);
             if (data.socialUrls) setSocialUrls(data.socialUrls);
@@ -156,17 +168,11 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         }).catch(console.error);
     }, [peerId]);
 
-    /* Handle Return from HeroCanvas fallback */
+    /* HeroCanvas saves own edits and updates the signed-in user; show them here. */
+    const myHeroData = me?.heroData as HeroData | undefined;
     useEffect(() => {
-        if (route?.params?.updatedHeroData) {
-            const newData = route.params.updatedHeroData;
-            setHeroData(newData);
-            updateProfile({ heroData: newData }).catch(console.error);
-            updateUser({ heroData: newData });
-            // Clear the param
-            navigation.setParams({ updatedHeroData: undefined });
-        }
-    }, [route?.params?.updatedHeroData]);
+        if (isSelf && myHeroData) setHeroData(myHeroData);
+    }, [isSelf, myHeroData]);
 
     /* Animation */
     const screenScale   = useRef(new Animated.Value(0.94)).current;
@@ -190,13 +196,9 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         if (!peerId || followLoading) return;
         setFollowLoading(true);
         try {
-            if (isFollowing) {
-                await unfollowUser(peerId);
-                setIsFollowing(false);
-            } else {
-                await followUser(peerId);
-                setIsFollowing(true);
-            }
+            setRelationship(await performRelationshipAction(peerId, peerUsername, relationship));
+        } catch (err) {
+            Alert.alert('Something went wrong', getAuthErrorMessage(err, 'Please try again.'));
         } finally {
             setFollowLoading(false);
         }
@@ -219,9 +221,18 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
             if (asset?.base64) {
                 // Send the image itself: a local file path can't be seen by other users.
                 const uri = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
+                const previous = localPeerAvatar;
                 setLocalPeerAvatar(uri);
-                updateProfile({ profilePicture: uri }).catch(console.error);
-                updateUser({ profilePicture: uri });
+                try {
+                    const response = await updateProfile({ profilePicture: uri });
+                    // Use the stored image URL the server returns.
+                    const saved = String(response?.user?.profilePicture ?? uri);
+                    setLocalPeerAvatar(saved);
+                    updateUser({ profilePicture: saved });
+                } catch (err) {
+                    setLocalPeerAvatar(previous);
+                    Alert.alert('Could not update photo', getAuthErrorMessage(err, 'Please try again.'));
+                }
             }
         } finally {
             setIsPickingAvatar(false);
@@ -265,12 +276,18 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     };
 
     const handleBlurName = () => {
-        updateProfile({ Firstname: editName }).catch(console.error);
-        updateUser({ Firstname: editName });
+        const name = editName.trim();
+        if (!name || name === savedNameRef.current) return;
+        savedNameRef.current = name;
+        updateProfile({ Firstname: name }).catch(console.error);
+        updateUser({ Firstname: name });
     };
     const handleBlurBio = () => {
-        updateProfile({ bio: editBio }).catch(console.error);
-        updateUser({ bio: editBio });
+        const bio = editBio.trim();
+        if (bio === savedBioRef.current) return;
+        savedBioRef.current = bio;
+        updateProfile({ bio }).catch(console.error);
+        updateUser({ bio });
     };
 
 
@@ -344,8 +361,8 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                                 </>
                             ) : (
                                 <>
-                                    <Text style={S.fullName} numberOfLines={2}>{editName}</Text>
-                                    <Text style={S.bio} numberOfLines={3}>{editBio}</Text>
+                                    <Text style={S.fullName} numberOfLines={2}>{editName || peerUsername.toUpperCase()}</Text>
+                                    {!!editBio && <Text style={S.bio} numberOfLines={3}>{editBio}</Text>}
                                 </>
                             )}
                         </View>
@@ -361,7 +378,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
                                 disabled={isSelf || followLoading}
                                 rippleColor="rgba(255,255,255,0.2)"
                             >
-                                <Text style={S.actionBtnText}>{isFollowing ? 'Following' : 'Follow Request'}</Text>
+                                <Text style={S.actionBtnText}>{relationshipLabel[isSelf ? 'self' : relationship]}</Text>
                             </RippleButton>
 
                             <RippleButton style={S.actionBtn} rippleColor="rgba(255,255,255,0.2)">

@@ -3,14 +3,19 @@ import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/compo
 import RippleButton from '@/app/components/RippleButton';
 import useAuth from '@/hooks/useAuth';
 import {
-    followUser,
     getAuthErrorMessage,
     getChatInbox,
     getFreshAccessToken,
     getUnreadNotificationCount,
-    unfollowUser,
     type ChatInboxDto,
 } from '@/services/AuthService';
+import {
+    isPrimaryRelationshipAction,
+    performRelationshipAction,
+    relationshipLabel,
+    toRelationship,
+    type Relationship,
+} from '@/services/relationships';
 import { useSocketEvents } from '@/services/WebSocketClient';
 import { useUnread } from '@/Context/UnreadContext';
 import { API_ORIGIN } from '@/services/config';
@@ -62,6 +67,7 @@ type GlobalUserSearchResult = {
     _id?: unknown;
     username?: string;
     profilePicture?: string;
+    relationship?: string;
 };
 
 const MONGO_OBJECT_ID_RE = /^[a-f\d]{24}$/i;
@@ -432,7 +438,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const [globalResults, setGlobalResults] = useState<GlobalUserSearchResult[]>([]);
     const [showingGlobal, setShowingGlobal] = useState(false);
 
-    const [followingById, setFollowingById] = useState<Record<string, boolean>>({});
+    const [relationshipById, setRelationshipById] = useState<Record<string, Relationship>>({});
     const [followPendingById, setFollowPendingById] = useState<Record<string, boolean>>({});
     const [chatRows, setChatRows] = useState<ChatListItem[]>(ChatBar);
 
@@ -688,6 +694,15 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                         : '',
             }));
             setGlobalResults(sanitized);
+            // Start each row from the server's view of the relationship.
+            setRelationshipById((prev) => {
+                const next = { ...prev };
+                for (const u of users) {
+                    const id = pickValidUserId(u);
+                    if (id) next[id] = toRelationship(u?.relationship);
+                }
+                return next;
+            });
         } catch (err: any) {
             setGlobalResults([]);
             setGlobalError(typeof err?.message === 'string' ? err.message : 'Search failed.');
@@ -733,10 +748,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         });
     }, [globalResults]);
 
-    const isFollowing = (targetUserId: string) => !!followingById[targetUserId];
+    const relationshipOf = (targetUserId: string): Relationship => relationshipById[targetUserId] ?? 'none';
     const isPending = (targetUserId: string) => !!followPendingById[targetUserId];
 
-    const toggleFollow = async (targetUserId: string) => {
+    const runRelationshipAction = async (targetUserId: string, username: string) => {
         if (!targetUserId) return;
         if (!currentUserId) {
             setGlobalError('Please login to follow users.');
@@ -745,20 +760,12 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         if (targetUserId === currentUserId) return;
         if (isPending(targetUserId)) return;
 
-        const nextFollowing = !isFollowing(targetUserId);
-
         setFollowPendingById((prev) => ({ ...prev, [targetUserId]: true }));
-        setFollowingById((prev) => ({ ...prev, [targetUserId]: nextFollowing }));
-
         try {
-            if (nextFollowing) {
-                await followUser(targetUserId);
-
-            } else {
-                await unfollowUser(targetUserId);
-            }
+            const next = await performRelationshipAction(targetUserId, username, relationshipOf(targetUserId));
+            setRelationshipById((prev) => ({ ...prev, [targetUserId]: next }));
+            if (next === 'connected') void loadChatsFromInbox();
         } catch (err) {
-            setFollowingById((prev) => ({ ...prev, [targetUserId]: !nextFollowing }));
             setGlobalError(getAuthErrorMessage(err, 'Failed to update follow status.'));
         } finally {
             setFollowPendingById((prev) => ({ ...prev, [targetUserId]: false }));
@@ -815,16 +822,16 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const renderGlobalItem = ({ item }: { item: GlobalChatListItem }) => {
         const targetUserId = String(item.id ?? '').trim();
         const pending = targetUserId ? isPending(targetUserId) : false;
-        const following = targetUserId ? isFollowing(targetUserId) : false;
+        const relationship = targetUserId ? relationshipOf(targetUserId) : 'none';
 
         const action: ChatRowAction = {
-            label: following ? 'Following' : 'Follow',
+            label: relationshipLabel[relationship],
             onPress: () => {
-                void toggleFollow(targetUserId);
+                void runRelationshipAction(targetUserId, item.name);
             },
             disabled: pending || !targetUserId || !currentUserId || targetUserId === currentUserId,
-            variant: following ? 'ghost' : 'primary',
-            loading: false,
+            variant: isPrimaryRelationshipAction(relationship) ? 'primary' : 'ghost',
+            loading: pending,
         };
 
         return <GlobalChatRow item={item} action={action} />;
@@ -1071,7 +1078,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                     data={globalAsChatRows}
                     keyExtractor={(item, index) => (item.id ? String(item.id) : `missing-id-${index}`)}
                     renderItem={renderGlobalItem}
-                    extraData={{ followingById, followPendingById, currentUserId }}
+                    extraData={{ relationshipById, followPendingById, currentUserId }}
                     style={styles.list}
                     contentContainerStyle={styles.listContent}
                     keyboardShouldPersistTaps="handled"
