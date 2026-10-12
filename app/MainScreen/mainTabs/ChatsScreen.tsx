@@ -6,11 +6,12 @@ import {
     followUser,
     getAuthErrorMessage,
     getChatInbox,
+    getFreshAccessToken,
     getUnreadNotificationCount,
     unfollowUser,
     type ChatInboxDto,
 } from '@/services/AuthService';
-import { useWebSocketClient } from '@/services/WebSocketClient';
+import { useSocketEvents } from '@/services/WebSocketClient';
 import { useUnread } from '@/Context/UnreadContext';
 import { API_ORIGIN } from '@/services/config';
 import { Ionicons } from '@expo/vector-icons';
@@ -415,7 +416,6 @@ const GlobalChatRow = ({
 };
 
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
-    const { lastMessage } = useWebSocketClient();
     const { refreshUnreadCount } = useUnread();
 
     const { user } = useAuth();
@@ -541,9 +541,10 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         };
     }, [navigation, checkUnreadNotifications, loadChatsFromInbox, refreshUnreadCount]);
 
-    useEffect(() => {
+    useSocketEvents((lastMessage) => {
         const type = String((lastMessage as any)?.type ?? '');
-        if (type === 'badge_update') {
+        // After a (re)connect, catch up on anything missed while offline.
+        if (type === 'badge_update' || type === 'registered') {
             refreshUnreadCount();
             void loadChatsFromInbox();
             return;
@@ -593,7 +594,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             };
             return mergeChatsById([], updated);
         });
-    }, [lastMessage, currentUserId]);
+    });
 
     useEffect(() => {
         Animated.timing(modeAnim, {
@@ -636,7 +637,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         setGlobalError(null);
 
         try {
-            const token = await SecureStore.getItemAsync('userToken');
+            const token = await getFreshAccessToken();
             const url = `${apiOrigin}/api/auth/search-users?query=${encodeURIComponent(q)}`;
 
             const headers: Record<string, string> = {

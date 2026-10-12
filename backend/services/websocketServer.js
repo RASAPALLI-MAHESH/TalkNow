@@ -8,6 +8,7 @@ const { resolveAuthToken } = require('../middleware/authMiddleware');
 const AUTH_TIMEOUT_MS = 10 * 1000;
 const MAX_CONTENT_CHARS = 4000;
 const CLOSE_UNAUTHORIZED = 4001;
+const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 
 // userId -> Set of authenticated sockets (a user can have several screens/devices open).
 const users = new Map();
@@ -96,7 +97,25 @@ const toObjectId = (value) => new mongoose.Types.ObjectId(toSafeId(value));
 const attachWebSocketServer = (httpServer) => {
     const wss = new WebSocket.Server({ server: httpServer, path: '/ws', maxPayload: 64 * 1024 });
 
+    // Ping every socket; one that didn't answer the previous ping is dead (e.g. phone lost signal).
+    const heartbeat = setInterval(() => {
+        for (const ws of wss.clients) {
+            if (ws.isAlive === false) {
+                ws.terminate();
+                continue;
+            }
+            ws.isAlive = false;
+            ws.ping();
+        }
+    }, HEARTBEAT_INTERVAL_MS);
+    wss.on('close', () => clearInterval(heartbeat));
+
     wss.on('connection', (ws) => {
+        ws.isAlive = true;
+        ws.on('pong', () => {
+            ws.isAlive = true;
+        });
+
         // The first message must be { type: 'auth', token }. Unauthenticated sockets are dropped.
         const authTimer = setTimeout(() => {
             if (!ws.userId) ws.close(CLOSE_UNAUTHORIZED, 'Authentication required');

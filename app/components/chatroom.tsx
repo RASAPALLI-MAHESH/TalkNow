@@ -19,7 +19,7 @@ import MessageBubble from '@/app/components/messageComponent';
 import { useUnread } from '@/Context/UnreadContext';
 import useAuth from '@/hooks/useAuth';
 import { getConversationMessages } from '@/services/AuthService';
-import { useWebSocketClient } from '@/services/WebSocketClient';
+import { useSocketEvents, useWebSocketClient } from '@/services/WebSocketClient';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
 import React, {
@@ -78,7 +78,7 @@ interface ChatroomProps {
 
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
-    const { lastMessage, sendMessage, markRead } = useWebSocketClient();
+    const { sendMessage, markRead } = useWebSocketClient();
     const { refreshUnreadCount } = useUnread();
     const insets = useSafeAreaInsets();
 
@@ -183,9 +183,49 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         };
     }, [peerId, writeConversationCache]);
 
-    useEffect(() => {
+    /* After a reconnect, merge the latest page so messages sent while offline appear. */
+    const syncLatestMessages = useCallback(async () => {
+        if (!peerId) return;
+        try {
+            const res = await getConversationMessages(peerId, undefined);
+            const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
+            const latest: ChatMessage[] = incoming.map((m: any) => ({
+                id: String(m?.id ?? Date.now()),
+                text: String(m?.text ?? ''),
+                sender: m?.sender === 'me' ? 'me' : 'other',
+                createdAt: String(m?.createdAt ?? new Date().toISOString()),
+                status:
+                    m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent'
+                        ? m.status
+                        : undefined,
+            }));
+            if (latest.length === 0) return;
+
+            // Newest first: keep older pages already loaded and messages still being sent.
+            const oldestLatest = latest[latest.length - 1].createdAt;
+            const latestIds = new Set(latest.map((m) => m.id));
+            setMessages((prev) => {
+                const pending = prev.filter((m) => m.status === 'sending');
+                const older = prev.filter(
+                    (m) => m.status !== 'sending' && !latestIds.has(m.id) && m.createdAt < oldestLatest
+                );
+                const next = [...pending, ...latest, ...older];
+                writeConversationCache(peerId, next);
+                return next;
+            });
+        } catch (err: any) {
+            console.log('conversation sync error:', err?.message ?? String(err));
+        }
+    }, [peerId, writeConversationCache]);
+
+    useSocketEvents((lastMessage) => {
         const type = String((lastMessage as any)?.type ?? '');
         if (!type) return;
+
+        if (type === 'registered') {
+            void syncLatestMessages();
+            return;
+        }
 
         const from = String((lastMessage as any)?.from ?? '').trim();
         const to = String((lastMessage as any)?.to ?? '').trim();
@@ -279,7 +319,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         if (type === 'new_message' && from === peerId && to === currentUserId) {
             markRead(peerId, date);
         }
-    }, [lastMessage, markRead, peerId, user?.id, writeConversationCache]);
+    });
 
     useEffect(() => {
         if (!peerId || messages.length === 0) return;
@@ -416,11 +456,10 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
         const ok = sendMessage(peerId, text, clientId);
         if (!ok) {
+            // Not connected: drop the bubble and give the text back so the user can resend.
             setDraft(text);
             setMessages((prev) => {
-                const next = prev.map((m) =>
-                    m.id === clientId ? { ...m, status: 'sending' as const } : m
-                );
+                const next = prev.filter((m) => m.id !== clientId);
                 writeConversationCache(peerId, next);
                 return next;
             });

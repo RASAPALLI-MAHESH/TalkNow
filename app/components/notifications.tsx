@@ -13,7 +13,7 @@ import {
     type MutualConnectionDto,
     type NotificationDto,
 } from '../../services/AuthService';
-import { useWebSocketClient } from '../../services/WebSocketClient';
+import { useSocketEvents } from '../../services/WebSocketClient';
 import AvatarPicker from './AvatarPicker';
 import FollowRequestComponent from './followRequestComponent';
 import FollowRequestNotification from './followrequestNotification';
@@ -57,7 +57,6 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
 
-    const { lastMessage } = useWebSocketClient();
     const pagerRef = useRef<ScrollView | null>(null);
     const [items, setItems] = useState<NotificationItem[]>([]);
     const [loading, setLoading] = useState(false);
@@ -122,8 +121,13 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         void loadNotifications();
     }, [loadNotifications]);
 
-    useEffect(() => {
+    useSocketEvents((lastMessage) => {
         const type = String((lastMessage as any)?.type ?? '');
+        // After a (re)connect, catch up on anything missed while offline.
+        if (type === 'registered') {
+            void loadNotifications();
+            return;
+        }
         if (type !== 'new_notification') return;
 
         const payload = lastMessage as any;
@@ -141,7 +145,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
         setItems((prev) => mergeByIdNewestFirst([normalized], prev));
         void SecureStore.setItemAsync(LAST_SEEN_KEY, new Date().toISOString());
-    }, [lastMessage]);
+    });
 
     const dismissNotification = async (id: string) => {
         const trimmed = String(id || '').trim();
