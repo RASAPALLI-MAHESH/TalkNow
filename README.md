@@ -26,6 +26,15 @@ This repo includes an Express + MongoDB backend in `backend/`.
 - `JWT_SECRET` (required in production; used to sign/verify auth tokens)
 - `BREVO_API_KEY` (required to send OTP emails)
 - `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` (optional)
+- `PUBLIC_BASE_URL` (optional; public origin used in image URLs, defaults to the request's host)
+
+### Images
+
+Avatars and hero backgrounds are stored in the `media` collection and served from `GET /api/media/:id`; profiles store only the URL. To move images saved inside user documents by older versions, run once:
+
+```bash
+PUBLIC_BASE_URL=https://<your-api-host> MONGO_URI=<uri> npm run migrate:images
+```
 
 ### Pointing the app to the API
 

@@ -5,6 +5,7 @@
   "scripts": {
     "start": "expo start",
     "backend": "node backend/server.js",
+    "migrate:images": "node backend/scripts/migrate-images-to-media.js",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",

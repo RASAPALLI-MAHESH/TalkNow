@@ -6,6 +6,13 @@ const bcrypt = require('bcryptjs');
 const { signAuthToken, getJwtSecret } = require("../config/Jwthandling");
 const sendOtp = require("../services/otpService");
 const { disconnectSessions } = require("../services/websocketServer");
+const {
+    InvalidImageError,
+    publicBaseUrl,
+    prepareImageInput,
+    commitImageInput,
+    deleteReplacedImage,
+} = require("../services/mediaStore");
 const mongoose = require('mongoose');
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -67,17 +74,6 @@ const normalizeOtp = (value) => String(value ?? '').trim();
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,24}$/;
 const PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).{6,72}$/;
 const PASSWORD_RULE_MESSAGE = 'Password must be 6-72 chars and include at least 1 uppercase letter and 1 number';
-const MAX_PROFILE_PICTURE_CHARS = 8 * 1024 * 1024;
-
-// Images must be reachable by other users: a public https URL or an inline data URI.
-const isValidProfilePicture = (value) => {
-    if (!value) return true;
-    if (value.length > MAX_PROFILE_PICTURE_CHARS) return false;
-    return (
-        /^https:\/\/\S+$/i.test(value) ||
-        /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/i.test(value)
-    );
-};
 
 // Used for timing-equal login failures when the username does not exist.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync('talknow-dummy-password', 10);
@@ -228,8 +224,14 @@ exports.signUp = async (req, res) => {
         if (!PASSWORD_REGEX.test(password)) {
             return res.status(400).json({ message: PASSWORD_RULE_MESSAGE });
         }
-        if (!isValidProfilePicture(profilePicture)) {
-            return res.status(400).json({ message: 'Invalid profile picture' });
+        // Check the image before anything is stored; it is saved once the account exists.
+        const newUserId = new mongoose.Types.ObjectId();
+        let preparedPicture;
+        try {
+            preparedPicture = await prepareImageInput(profilePicture, { ownerId: newUserId });
+        } catch (err) {
+            if (err instanceof InvalidImageError) return res.status(400).json({ message: err.message });
+            throw err;
         }
 
         // Final OTP check at creation
@@ -249,14 +251,21 @@ exports.signUp = async (req, res) => {
         }
 
         const hashedPassword = await bcrypt.hash(password , 10);
+        const profilePictureUrl = await commitImageInput(preparedPicture, { ownerId: newUserId, baseUrl: publicBaseUrl(req) });
         const newUser = new User({
+            _id: newUserId,
             Firstname,
             username,
             password: hashedPassword,
             email,
-            profilePicture
+            profilePicture: profilePictureUrl
         });
-        await newUser.save();
+        try {
+            await newUser.save();
+        } catch (err) {
+            await deleteReplacedImage(profilePictureUrl, '', newUserId);
+            throw err;
+        }
 
         // Clean up OTP
         await OtpModel.deleteOne({ email });
@@ -554,8 +563,13 @@ const fail = (message) => {
     throw new ProfileValidationError(message);
 };
 
-const validateProfileUpdates = (body) => {
+/**
+ * Checks every field before anything is written. Image fields are only checked here
+ * (returned in `images`); the caller stores them once the whole update is known to be valid.
+ */
+const validateProfileUpdates = async (body, { ownerId }) => {
     const updates = {};
+    const images = {};
 
     if (body.Firstname !== undefined) {
         const Firstname = normalizeFirstname(body.Firstname);
@@ -564,9 +578,7 @@ const validateProfileUpdates = (body) => {
     }
 
     if (body.profilePicture !== undefined) {
-        const profilePicture = String(body.profilePicture ?? '').trim();
-        if (!isValidProfilePicture(profilePicture)) fail('Invalid profile picture');
-        updates.profilePicture = profilePicture;
+        images.profilePicture = await prepareImageInput(body.profilePicture, { ownerId });
     }
 
     if (body.bio !== undefined) {
@@ -580,11 +592,10 @@ const validateProfileUpdates = (body) => {
         if (!isPlainObject(hero)) fail('Invalid hero data');
         const text = String(hero.text ?? '');
         const themeId = String(hero.themeId ?? 't1');
-        const customImageUri = String(hero.customImageUri ?? '').trim();
         if (text.length > MAX_HERO_TEXT_CHARS) fail(`Hero text must be at most ${MAX_HERO_TEXT_CHARS} characters`);
         if (!/^[a-z0-9_-]{1,20}$/i.test(themeId)) fail('Invalid hero theme');
-        if (!isValidProfilePicture(customImageUri)) fail('Invalid hero image');
-        updates.heroData = { text, themeId, customImageUri };
+        images.heroImage = await prepareImageInput(hero.customImageUri, { ownerId });
+        updates.heroData = { text, themeId, customImageUri: '' };
     }
 
     if (body.socialUrls !== undefined) {
@@ -614,7 +625,7 @@ const validateProfileUpdates = (body) => {
         });
     }
 
-    return updates;
+    return { updates, images };
 };
 
 exports.updateProfile = async (req, res) => {
@@ -625,13 +636,27 @@ exports.updateProfile = async (req, res) => {
         const userId = req.user.id;
 
         let updates;
+        let images;
         try {
-            updates = validateProfileUpdates(req.body ?? {});
+            ({ updates, images } = await validateProfileUpdates(req.body ?? {}, { ownerId: userId }));
         } catch (err) {
-            if (err instanceof ProfileValidationError) {
+            if (err instanceof ProfileValidationError || err instanceof InvalidImageError) {
                 return res.status(400).json({ message: err.message });
             }
             throw err;
+        }
+
+        const previous = await User.findById(userId).select('profilePicture heroData').lean();
+        if (!previous) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        const imageContext = { ownerId: userId, baseUrl: publicBaseUrl(req) };
+        if (images.profilePicture) {
+            updates.profilePicture = await commitImageInput(images.profilePicture, imageContext);
+        }
+        if (images.heroImage) {
+            updates.heroData.customImageUri = await commitImageInput(images.heroImage, imageContext);
         }
 
         const updatedUser = await User.findByIdAndUpdate(
@@ -642,6 +667,14 @@ exports.updateProfile = async (req, res) => {
 
         if (!updatedUser) {
             return res.status(404).json({ message: "User not found" });
+        }
+
+        // Remove images the profile no longer uses.
+        if (updates.profilePicture !== undefined) {
+            await deleteReplacedImage(previous.profilePicture, updatedUser.profilePicture, userId);
+        }
+        if (updates.heroData !== undefined) {
+            await deleteReplacedImage(previous.heroData?.customImageUri, updatedUser.heroData?.customImageUri, userId);
         }
 
         return res.status(200).json({

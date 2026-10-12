@@ -3,6 +3,7 @@ const http = require('http');
 const express = require("express");
 const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
+const mediaRoutes = require("./routes/mediaRoutes");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
@@ -32,6 +33,16 @@ const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 1000, // API-wide baseline. Apply stricter limits on sensitive routes separately as needed.
     message: "Too many requests from this IP, please try again later",
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+    // Images have their own limit below: one screen can load dozens of avatars.
+    skip: (req) => req.path.startsWith('/media/'),
+});
+
+const mediaLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 3000,
     standardHeaders: true,
     legacyHeaders: false,
     validate: { xForwardedForHeader: false },
@@ -88,6 +99,7 @@ server.use(express.json({ limit: '8mb' }));
 server.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 server.use("/api/auth", authRoutes)
+server.use("/api/media", mediaLimiter, mediaRoutes)
 
 server.get(
     "/api/health", (req , res) => {
