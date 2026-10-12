@@ -420,8 +420,8 @@ exports.refresh = async (req, res) => {
         }
         const presentedHash = sha256(presentedToken);
 
-        // Two attempts: a parallel refresh may rotate the token between our read and write.
-        for (let attempt = 0; attempt < 2; attempt++) {
+        // Parallel refreshes may rotate the token between our read and write; retry a few times.
+        for (let attempt = 0; attempt < 5; attempt++) {
             const session = await Session.findOne({ _id: sessionId, expiresAt: { $gt: new Date() } }).lean();
             if (!session) {
                 return res.status(401).json({ message: "Session expired" });
@@ -440,12 +440,13 @@ exports.refresh = async (req, res) => {
                 return res.status(401).json({ message: "Session expired" });
             }
 
+            // A grace-period retry keeps the original previous token and timestamp, so a phone
+            // that keeps losing responses can retry with it until the grace period ends.
             const nextRefreshToken = newRefreshToken(session._id);
             const update = {
                 refreshTokenHash: sha256(nextRefreshToken),
-                previousRefreshTokenHash: session.refreshTokenHash,
-                rotatedAt: new Date(),
                 expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+                ...(isCurrent ? { previousRefreshTokenHash: session.refreshTokenHash, rotatedAt: new Date() } : {}),
             };
             const result = await Session.updateOne(
                 { _id: session._id, refreshTokenHash: session.refreshTokenHash },
