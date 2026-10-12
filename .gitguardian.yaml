@@ -1,0 +1,7 @@
+# GitGuardian secret scanning settings.
+# The end-to-end test uses made-up credentials (test users' passwords, a throwaway JWT
+# secret, fake push tokens) against a temporary database; none of them are real secrets.
+version: 2
+secret:
+  ignored_paths:
+    - "backend/tests/**"
