@@ -102,9 +102,94 @@ const normalizeAuthBaseUrl = (rawUrl: string) => {
 
 client.defaults.baseURL = normalizeAuthBaseUrl(API_URL);
 
+const ACCESS_TOKEN_KEY = 'userToken';
+const REFRESH_TOKEN_KEY = 'refreshToken';
+
+const setTokens = async (token?: string, refreshToken?: string) => {
+    if (token) await SecureStore.setItemAsync(ACCESS_TOKEN_KEY, token);
+    if (refreshToken) await SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refreshToken);
+};
+
+const clearToken = async () => {
+    await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
+    await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+};
+
+// Set by AuthProvider so a dead session also signs the user out of the UI.
+let onUnauthorized: (() => void) | null = null;
+
+export const setUnauthorizedHandler = (handler: (() => void) | null) => {
+    onUnauthorized = handler;
+};
+
+const signOutLocally = async () => {
+    await clearToken();
+    onUnauthorized?.();
+};
+
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Swaps the refresh token for a new access token (the server also rotates the refresh token).
+ * Concurrent callers share one request: the server treats a reused refresh token as stolen.
+ * Resolves null and signs out when the session is gone; throws on network errors so an
+ * offline device keeps its tokens.
+ */
+export const refreshAccessToken = (): Promise<string | null> => {
+    if (!refreshInFlight) {
+        refreshInFlight = (async () => {
+            const refreshToken = await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+            if (!refreshToken) {
+                await signOutLocally();
+                return null;
+            }
+            try {
+                // Plain axios, not `client`, so this request never goes through the interceptors below.
+                const response = await axios.post(`${client.defaults.baseURL}/refresh`, { refreshToken }, { timeout: 10000 });
+                await setTokens(response.data?.token, response.data?.refreshToken);
+                return typeof response.data?.token === 'string' ? response.data.token : null;
+            } catch (error) {
+                if (axios.isAxiosError(error) && error.response?.status === 401) {
+                    await signOutLocally();
+                    return null;
+                }
+                throw error;
+            }
+        })().finally(() => {
+            refreshInFlight = null;
+        });
+    }
+    return refreshInFlight;
+};
+
+const ACCESS_TOKEN_REFRESH_MARGIN_MS = 60 * 1000;
+
+const accessTokenExpiresSoon = (token: string) => {
+    try {
+        const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(atob(part + '='.repeat((4 - (part.length % 4)) % 4)));
+        return typeof payload?.exp === 'number' && payload.exp * 1000 - Date.now() < ACCESS_TOKEN_REFRESH_MARGIN_MS;
+    } catch {
+        return false;
+    }
+};
+
+/** The stored access token, refreshed first if it is about to expire. Null when signed out. */
+export const getFreshAccessToken = async (): Promise<string | null> => {
+    const token = await SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
+    if (!token) return null;
+    if (!accessTokenExpiresSoon(token)) return token;
+    try {
+        return await refreshAccessToken();
+    } catch {
+        // Offline: send the current token and let the server decide.
+        return token;
+    }
+};
+
 // Request interceptor to attach JWT token to headers securely
 client.interceptors.request.use(async (config) => {
-    const token = await SecureStore.getItemAsync('userToken');
+    const token = await getFreshAccessToken();
     if (token) {
         // Axios v1 types may represent headers as AxiosHeaders; mutate in-place.
         (config.headers as any) = config.headers ?? {};
@@ -113,40 +198,35 @@ client.interceptors.request.use(async (config) => {
     return config;
 }, (error) => Promise.reject(error));
 
-const setToken = async (token?: string) => {
-    if (token) {
-        await SecureStore.setItemAsync('userToken', token);
-    }
-};
-
-const clearToken = async () => {
-    await SecureStore.deleteItemAsync('userToken');
-};
-
-// Set by AuthProvider so a rejected session also signs the user out of the UI.
-let onUnauthorized: (() => void) | null = null;
-
-export const setUnauthorizedHandler = (handler: (() => void) | null) => {
-    onUnauthorized = handler;
-};
-
-// Response interceptor: if a token is rejected (expired, logged out, password reset), sign out.
+// Response interceptor: on a rejected access token, refresh once and retry; sign out if the session is gone.
 client.interceptors.response.use(
     (response) => response,
     async (error) => {
         const status = error?.response?.status;
-        const hadToken = !!error?.config?.headers?.Authorization;
-        if (status === 401 && hadToken) {
-            await clearToken();
-            onUnauthorized?.();
+        const config = error?.config;
+        const hadToken = !!config?.headers?.Authorization;
+        if (status !== 401 || !hadToken) return Promise.reject(error);
+
+        if (config._retriedAfterRefresh) {
+            await signOutLocally();
+            return Promise.reject(error);
         }
-        return Promise.reject(error);
+        config._retriedAfterRefresh = true;
+
+        let token: string | null;
+        try {
+            token = await refreshAccessToken();
+        } catch {
+            return Promise.reject(error);
+        }
+        if (!token) return Promise.reject(error);
+        return client(config);
     }
 );
 
 export const login = async (username: string, password: string): Promise<AuthResponse> => {
     const response = await client.post('/login', { username, password });
-    await setToken(response.data.token);
+    await setTokens(response.data.token, response.data.refreshToken);
     return response.data;
 };
 
@@ -192,7 +272,7 @@ export const signUp = async (
         otp,
         profilePicture,
     });
-    await setToken(response.data.token);
+    await setTokens(response.data.token, response.data.refreshToken);
     return response.data;
 };
 

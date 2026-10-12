@@ -39,6 +39,8 @@ router.post("/signup", credentialLimiter, authController.signUp);
 router.post("/login", credentialLimiter, authController.login);
 router.post("/forgot-password", credentialLimiter, authController.forgotPassword);
 router.post("/reset-password", credentialLimiter, authController.resetPassword);
+// Not under credentialLimiter: every device refreshes every 15 minutes, and many users can share one IP.
+router.post("/refresh", authController.refresh);
 
 // Protected routes
 router.post("/logout", authMiddleware, authController.logout);

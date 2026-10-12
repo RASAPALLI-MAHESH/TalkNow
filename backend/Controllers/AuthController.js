@@ -9,14 +9,30 @@ const { disconnectSessions } = require("../services/websocketServer");
 const mongoose = require('mongoose');
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ACCESS_TOKEN_TTL = '15m';
+const REFRESH_GRACE_MS = 60 * 1000;
 
-// Every token is tied to a Session row so it can be revoked (logout, password reset).
-const issueAuthToken = async (userId) => {
-    const session = await Session.create({
-        userId,
-        expiresAt: new Date(Date.now() + SESSION_TTL_MS),
-    });
-    return signAuthToken({ id: String(userId), sid: String(session._id) }, { expiresIn: "30d" });
+const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+
+const hashesEqual = (a, b) => {
+    if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
+};
+
+// Refresh tokens look like "<sessionId>.<random>" so the session is found by id;
+// only a hash of the whole token is stored.
+const newRefreshToken = (sessionId) => `${sessionId}.${crypto.randomBytes(32).toString('base64url')}`;
+
+const signAccessToken = (userId, sessionId) =>
+    signAuthToken({ id: String(userId), sid: String(sessionId) }, { expiresIn: ACCESS_TOKEN_TTL });
+
+// A short-lived access token plus a refresh token, both tied to a revocable Session row.
+const issueSession = async (userId) => {
+    const session = new Session({ userId, expiresAt: new Date(Date.now() + SESSION_TTL_MS) });
+    const refreshToken = newRefreshToken(session._id);
+    session.refreshTokenHash = sha256(refreshToken);
+    await session.save();
+    return { token: signAccessToken(userId, session._id), refreshToken };
 };
 
 const OTP_TTL_MS = 10 * 60 * 1000;
@@ -245,10 +261,11 @@ exports.signUp = async (req, res) => {
         // Clean up OTP
         await OtpModel.deleteOne({ email });
 
-        const token = await issueAuthToken(newUser._id);
+        const { token, refreshToken } = await issueSession(newUser._id);
         res.status(201).json({
             message: "User created successfully",
             token,
+            refreshToken,
             user: {
                 id: newUser._id,
                 username: newUser.username,
@@ -279,10 +296,11 @@ exports.login = async (req, res) => {
             return res.status(401).json({ message: "Invalid username or password" });
         }
 
-        const token = await issueAuthToken(existingUser._id);
+        const { token, refreshToken } = await issueSession(existingUser._id);
         res.status(200).json({
             message: "Login successful",
             token,
+            refreshToken,
             user: {
                 id: existingUser._id,
                 username: existingUser.username,
@@ -377,6 +395,65 @@ exports.resetPassword = async (req, res) => {
         serverError(res, err, 'resetPassword failed');
     }
 }
+
+/**
+ * Swaps a refresh token for a new access token and a new refresh token (rotation).
+ * Presenting a refresh token that was already replaced means it was copied, so the
+ * whole session is ended. The one exception is the token replaced in the last minute,
+ * for a client that never received the response to its previous refresh.
+ */
+exports.refresh = async (req, res) => {
+    try {
+        const presentedToken = String(req.body?.refreshToken ?? '');
+        const sessionId = presentedToken.split('.')[0];
+        if (!mongoose.Types.ObjectId.isValid(sessionId)) {
+            return res.status(401).json({ message: "Session expired" });
+        }
+        const presentedHash = sha256(presentedToken);
+
+        // Two attempts: a parallel refresh may rotate the token between our read and write.
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const session = await Session.findOne({ _id: sessionId, expiresAt: { $gt: new Date() } }).lean();
+            if (!session) {
+                return res.status(401).json({ message: "Session expired" });
+            }
+
+            const isCurrent = hashesEqual(presentedHash, session.refreshTokenHash);
+            const isRecentPrevious =
+                !isCurrent &&
+                hashesEqual(presentedHash, session.previousRefreshTokenHash) &&
+                !!session.rotatedAt &&
+                Date.now() - new Date(session.rotatedAt).getTime() < REFRESH_GRACE_MS;
+
+            if (!isCurrent && !isRecentPrevious) {
+                await Session.deleteOne({ _id: session._id });
+                disconnectSessions({ userId: session.userId, sessionId: session._id });
+                return res.status(401).json({ message: "Session expired" });
+            }
+
+            const nextRefreshToken = newRefreshToken(session._id);
+            const update = {
+                refreshTokenHash: sha256(nextRefreshToken),
+                previousRefreshTokenHash: session.refreshTokenHash,
+                rotatedAt: new Date(),
+                expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+            };
+            const result = await Session.updateOne(
+                { _id: session._id, refreshTokenHash: session.refreshTokenHash },
+                { $set: update }
+            );
+            if (result.modifiedCount === 1) {
+                return res.status(200).json({
+                    token: signAccessToken(session.userId, session._id),
+                    refreshToken: nextRefreshToken,
+                });
+            }
+        }
+        return res.status(409).json({ message: "Please try again" });
+    } catch (err) {
+        serverError(res, err, 'refresh failed');
+    }
+};
 
 exports.logout = async (req, res) => {
     try {
