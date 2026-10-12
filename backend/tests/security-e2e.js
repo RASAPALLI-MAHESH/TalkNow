@@ -11,7 +11,15 @@
 process.env.PORT = '18080';
 process.env.MONGO_URI = `${String(process.env.TEST_MONGO_URL || 'mongodb://127.0.0.1:27017').replace(/\/$/, '')}/talknow_test_${Date.now()}`;
 process.env.NODE_ENV = 'test';
-process.env.JWT_SECRET = 'test-secret';
+// Credentials are generated per run, so this file contains no fixed passwords or secrets.
+const testCrypto = require('crypto');
+const randomPart = () => testCrypto.randomBytes(9).toString('base64url');
+const JWT_TEST_SECRET = testCrypto.randomBytes(32).toString('hex');
+const PASSWORD = `P${randomPart()}7`; // meets the rule: an uppercase letter and a digit
+const NEW_PASSWORD = `N${randomPart()}8`;
+const WRONG_PASSWORD = `W${randomPart()}9`;
+const WEAK_PASSWORD = randomPart().slice(0, 4).toLowerCase(); // too short, no uppercase or digit
+process.env.JWT_SECRET = JWT_TEST_SECRET;
 delete process.env.BREVO_API_KEY;
 
 const path = require('path');
@@ -118,7 +126,7 @@ const authSocket = async (token) => {
 const signupUser = async (email, username) => {
     await api('POST', '/send-signup-otp', { email });
     const otp = otps[email];
-    const r = await api('POST', '/signup', { Firstname: 'T', email, username, password: 'Passw0rd', otp });
+    const r = await api('POST', '/signup', { Firstname: 'T', email, username, password: PASSWORD, otp });
     return r.data?.token ? { token: r.data.token, id: String(r.data.user.id) } : null;
 };
 
@@ -153,42 +161,42 @@ const signupUser = async (email, username) => {
 
     r = await api('POST', '/verify-signup-otp', { email: emailA, otp: otps[emailA] });
     check('correct code verifies', r.status === 200, r);
-    r = await api('POST', '/signup', { Firstname: 'A', email: emailA, username: 'alice', password: 'weak', otp: otps[emailA] });
+    r = await api('POST', '/signup', { Firstname: 'A', email: emailA, username: 'alice', password: WEAK_PASSWORD, otp: otps[emailA] });
     check('weak password rejected at signup', r.status === 400, r);
-    r = await api('POST', '/signup', { Firstname: 'A', email: emailA, username: 'alice', password: 'Passw0rd', otp: otps[emailA], profilePicture: 'file:///data/user/0/x.jpg' });
+    r = await api('POST', '/signup', { Firstname: 'A', email: emailA, username: 'alice', password: PASSWORD, otp: otps[emailA], profilePicture: 'file:///data/user/0/x.jpg' });
     check('file:// avatar rejected', r.status === 400, r);
-    r = await api('POST', '/signup', { Firstname: 'A', email: emailA, username: 'alice', password: 'Passw0rd', otp: otps[emailA] });
+    r = await api('POST', '/signup', { Firstname: 'A', email: emailA, username: 'alice', password: PASSWORD, otp: otps[emailA] });
     check('signup succeeds', r.status === 201 && r.data.token, r);
     const alice = { token: r.data.token, id: String(r.data.user.id) };
 
     console.info('\nLogin');
-    const unknown = await api('POST', '/login', { username: 'nobody', password: 'Passw0rd' });
-    const badPw = await api('POST', '/login', { username: 'alice', password: 'Wrong123' });
+    const unknown = await api('POST', '/login', { username: 'nobody', password: PASSWORD });
+    const badPw = await api('POST', '/login', { username: 'alice', password: WRONG_PASSWORD });
     check('unknown user and wrong password look identical', unknown.status === 401 && badPw.status === 401 && unknown.data.message === badPw.data.message, [unknown, badPw]);
-    r = await api('POST', '/login', { username: { $ne: null }, password: 'Passw0rd' });
+    r = await api('POST', '/login', { username: { $ne: null }, password: PASSWORD });
     check('query-operator injection in username fails', r.status === 401, r);
-    r = await api('POST', '/login', { username: 'alice', password: 'Passw0rd' });
+    r = await api('POST', '/login', { username: 'alice', password: PASSWORD });
     check('login succeeds', r.status === 200 && r.data.token, r);
     const aliceToken2 = r.data.token;
 
     console.info('\nTokens and sessions');
     r = await api('GET', '/profile', null, { token: alice.token });
     check('valid token accepted', r.status === 200, r);
-    const forged = jwt.sign({ id: alice.id }, 'test-secret', { expiresIn: '1d' });
+    const forged = jwt.sign({ id: alice.id }, JWT_TEST_SECRET, { expiresIn: '1d' });
     r = await api('GET', '/profile', null, { token: forged });
     check('token without a session rejected', r.status === 401, r);
-    const forged2 = jwt.sign({ id: alice.id, sid: new mongoose.Types.ObjectId().toString() }, 'test-secret');
+    const forged2 = jwt.sign({ id: alice.id, sid: new mongoose.Types.ObjectId().toString() }, JWT_TEST_SECRET);
     r = await api('GET', '/profile', null, { token: forged2 });
     check('token with unknown session rejected', r.status === 401, r);
 
     console.info('\nRefresh tokens');
     const Session = require(path.join(ROOT, 'backend/models/session'));
-    r = await api('POST', '/login', { username: 'alice', password: 'Passw0rd' });
+    r = await api('POST', '/login', { username: 'alice', password: PASSWORD });
     const rt1 = r.data.refreshToken;
     check('login returns a refresh token', typeof rt1 === 'string' && rt1.split('.').length === 2, r.data);
     const claims = jwt.decode(r.data.token);
     check('access token lives 15 minutes', claims.exp - claims.iat === 900, claims);
-    const expired = jwt.sign({ id: claims.id, sid: claims.sid }, 'test-secret', { expiresIn: -10 });
+    const expired = jwt.sign({ id: claims.id, sid: claims.sid }, JWT_TEST_SECRET, { expiresIn: -10 });
     r = await api('GET', '/profile', null, { token: expired });
     check('expired access token rejected', r.status === 401, r);
     const storedSession = await Session.findById(claims.sid).lean();
@@ -204,7 +212,7 @@ const signupUser = async (email, username) => {
     const parallel = await Promise.all([1, 2, 3, 4, 5].map(() => api('POST', '/refresh', { refreshToken: rt3 })));
     check('parallel refreshes with one token all succeed', parallel.every((x) => x.status === 200), parallel.map((x) => x.status));
     // A phone that loses two refresh responses in a row retries with the same old token.
-    r = await api('POST', '/login', { username: 'alice', password: 'Passw0rd' });
+    r = await api('POST', '/login', { username: 'alice', password: PASSWORD });
     const lostT = r.data.refreshToken;
     await api('POST', '/refresh', { refreshToken: lostT });
     await api('POST', '/refresh', { refreshToken: lostT });
@@ -292,7 +300,7 @@ const signupUser = async (email, username) => {
     const MEDIA_RE = /^http:\/\/127\.0\.0\.1:18080\/api\/media\/[a-f0-9]{32}$/;
 
     await api('POST', '/send-signup-otp', { email: 'dave@example.com' });
-    r = await api('POST', '/signup', { Firstname: 'D', email: 'dave@example.com', username: 'dave', password: 'Passw0rd', otp: otps['dave@example.com'], profilePicture: `data:image/png;base64,${PNG}` });
+    r = await api('POST', '/signup', { Firstname: 'D', email: 'dave@example.com', username: 'dave', password: PASSWORD, otp: otps['dave@example.com'], profilePicture: `data:image/png;base64,${PNG}` });
     check('signup stores avatar as a media URL', r.status === 201 && MEDIA_RE.test(r.data.user.profilePicture), r.data?.user);
     const dave = { token: r.data.token, id: String(r.data.user.id), avatar: r.data.user.profilePicture };
     let img = await fetch(dave.avatar);
@@ -454,16 +462,16 @@ const signupUser = async (email, username) => {
 
     console.info('\nAccount deletion');
     await api('POST', '/send-signup-otp', { email: 'erin@example.com' });
-    r = await api('POST', '/signup', { Firstname: 'E', email: 'erin@example.com', username: 'erin', password: 'Passw0rd', otp: otps['erin@example.com'], profilePicture: `data:image/png;base64,${PNG}` });
+    r = await api('POST', '/signup', { Firstname: 'E', email: 'erin@example.com', username: 'erin', password: PASSWORD, otp: otps['erin@example.com'], profilePicture: `data:image/png;base64,${PNG}` });
     const erin = { token: r.data.token, id: String(r.data.user.id), avatar: r.data.user.profilePicture };
     await Connection.create({ pairKey: [erin.id, carol.id].sort().join(':'), participants: [{ userId: erin.id }, { userId: carol.id }], requestedBy: erin.id, requestedTo: carol.id, status: 'accepted' });
     const erinWs = await authSocket(erin.token);
     erinWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, content: 'bye', clientId: 'e1' }));
     await waitFor(erinWs.ws, (m) => m.type === 'sent');
     await api('POST', '/follow', { targetUserId: dave.id }, { token: erin.token });
-    r = await api('DELETE', '/account', { password: 'Wrong123' }, { token: erin.token });
+    r = await api('DELETE', '/account', { password: WRONG_PASSWORD }, { token: erin.token });
     check('wrong password refused with 403 (not 401)', r.status === 403, r);
-    r = await api('DELETE', '/account', { password: 'Passw0rd' }, { token: erin.token });
+    r = await api('DELETE', '/account', { password: PASSWORD }, { token: erin.token });
     check('account deleted', r.status === 200, r);
     const MessageModel = require(path.join(ROOT, 'backend/models/message'));
     const NotificationModel = require(path.join(ROOT, 'backend/models/notification'));
@@ -482,7 +490,7 @@ const signupUser = async (email, username) => {
     check('deleted account token rejected', r.status === 401, r);
     await sleep(200);
     check('deleted account sockets closed', erinWs.ws.closeCode === 4001, erinWs.ws.closeCode);
-    r = await api('POST', '/login', { username: 'erin', password: 'Passw0rd' });
+    r = await api('POST', '/login', { username: 'erin', password: PASSWORD });
     check("deleted account can't log in", r.status === 401, r);
 
     console.info('\nErrors');
@@ -498,29 +506,29 @@ const signupUser = async (email, username) => {
     const resetCode = otps[emailA];
     const stored = await User.findOne({ email: emailA }).lean();
     check('reset code stored hashed', stored.resetOtpHash && stored.resetOtpHash !== resetCode && stored.resetOtp === undefined, stored.resetOtpHash);
-    r = await api('POST', '/reset-password', { email: emailA, otp: resetCode, newPassword: 'short' });
+    r = await api('POST', '/reset-password', { email: emailA, otp: resetCode, newPassword: WEAK_PASSWORD });
     check('weak new password rejected', r.status === 400, r);
     const wrongR = resetCode === '111111' ? '222222' : '111111';
-    for (let i = 0; i < 5; i++) await api('POST', '/reset-password', { email: emailA, otp: wrongR, newPassword: 'NewPassw0rd' });
-    r = await api('POST', '/reset-password', { email: emailA, otp: resetCode, newPassword: 'NewPassw0rd' });
+    for (let i = 0; i < 5; i++) await api('POST', '/reset-password', { email: emailA, otp: wrongR, newPassword: NEW_PASSWORD });
+    r = await api('POST', '/reset-password', { email: emailA, otp: resetCode, newPassword: NEW_PASSWORD });
     check('reset code dead after 5 wrong guesses', r.status === 400, r);
 
     await User.updateOne({ email: emailA }, { $set: { resetOtpSentAt: new Date(0) } }); // skip the 60s cooldown
     const a3 = await authSocket(alice.token);
     await api('POST', '/forgot-password', { email: emailA });
-    r = await api('POST', '/reset-password', { email: emailA, otp: otps[emailA], newPassword: 'NewPassw0rd' });
+    r = await api('POST', '/reset-password', { email: emailA, otp: otps[emailA], newPassword: NEW_PASSWORD });
     check('reset succeeds with fresh code', r.status === 200, r);
     r = await api('GET', '/profile', null, { token: alice.token });
     check('all old sessions revoked after reset', r.status === 401, r);
     await sleep(200);
     check('old sockets closed after reset', a3.ws.closeCode === 4001, a3.ws.closeCode);
-    r = await api('POST', '/login', { username: 'alice', password: 'NewPassw0rd' });
+    r = await api('POST', '/login', { username: 'alice', password: NEW_PASSWORD });
     check('login with new password', r.status === 200, r);
 
     console.info('\nRate limit');
     const ip = '203.0.113.9';
     let last;
-    for (let i = 0; i < 31; i++) last = await api('POST', '/login', { username: 'alice', password: 'Wrong123' }, { ip });
+    for (let i = 0; i < 31; i++) last = await api('POST', '/login', { username: 'alice', password: WRONG_PASSWORD }, { ip });
     check('31st credential request from one IP gets 429', last.status === 429, last.status);
 
     console.info(`\n${passed} passed, ${failed} failed`);

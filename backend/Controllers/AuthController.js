@@ -85,7 +85,7 @@ const PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d).{6,72}$/;
 const PASSWORD_RULE_MESSAGE = 'Password must be 6-72 chars and include at least 1 uppercase letter and 1 number';
 
 // Used for timing-equal login failures when the username does not exist.
-const DUMMY_PASSWORD_HASH = bcrypt.hashSync('talknow-dummy-password', 10);
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
 
 const asMongoDuplicateKeyMessage = (err) => {
     // Mongoose wraps MongoServerError; prefer consistent checks.
