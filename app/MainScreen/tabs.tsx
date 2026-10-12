@@ -2,17 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import React from 'react';
 
-import AIScreen from './mainTabs/AIScreen';
 import ChatsScreen from './mainTabs/ChatsScreen';
 import SettingsScreen from './mainTabs/SettingsScreen';
-import StatusScreen from './mainTabs/StatusScreen';
 
 import { useUnread } from '@/Context/UnreadContext';
 
 export type MainTabParamList = {
     Chats: undefined;
-    Status: undefined;
-    AI: undefined;
     Settings: undefined;
 };
 
@@ -33,12 +29,6 @@ const MainTabs = () => {
                         case 'Chats':
                             iconName = focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline';
                             break;
-                        case 'Status':
-                            iconName = focused ? 'pulse' : 'pulse-outline';
-                            break;
-                        case 'AI':
-                            iconName = focused ? 'sparkles' : 'sparkles-outline';
-                            break;
                         case 'Settings':
                             iconName = focused ? 'settings' : 'settings-outline';
                             break;
@@ -55,8 +45,6 @@ const MainTabs = () => {
                 component={ChatsScreen}
                 options={{ tabBarBadge: totalUnread > 0 ? totalUnread : undefined }}
             />
-            <Tab.Screen name="Status" component={StatusScreen} />
-            <Tab.Screen name="AI" component={AIScreen} />
             <Tab.Screen name="Settings" component={SettingsScreen} />
         </Tab.Navigator>
     );
