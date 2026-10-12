@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Connection = require('../models/connection');
 // No longer using this sendMessage since chatFunctions handles it natively.
@@ -32,10 +33,12 @@ async function getInbox(userId) {
 
 // ─── Total unread badge (the number on the app icon) ─────────────────────────
 async function getTotalUnread(userId) {
+  // Aggregations don't cast types, so the id must be an ObjectId to match anything.
+  const me = new mongoose.Types.ObjectId(String(userId));
   const result = await Connection.aggregate([
-    { $match: { 'participants.userId': userId, 'status': 'accepted', 'hasMessages': true } },
+    { $match: { 'participants.userId': me, 'status': 'accepted', 'hasMessages': true } },
     { $unwind: '$participants' },
-    { $match: { 'participants.userId': userId } },
+    { $match: { 'participants.userId': me } },
     {
       $group: {
         _id: null,

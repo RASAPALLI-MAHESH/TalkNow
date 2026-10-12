@@ -67,7 +67,22 @@ type ConversationCacheItem = {
 };
 
 const CONVERSATION_CACHE_TTL_MS = 2 * 60 * 1000;
+const PAGE_SIZE = 50;
 const conversationCache = new Map<string, ConversationCacheItem>();
+
+const toChatMessage = (m: any): ChatMessage => ({
+    id: String(m?.id ?? Date.now()),
+    text: String(m?.text ?? ''),
+    sender: m?.sender === 'me' ? 'me' : 'other',
+    createdAt: String(m?.createdAt ?? new Date().toISOString()),
+    status:
+        m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent' || m?.status === 'sending'
+            ? m.status
+            : undefined,
+});
+
+// Lists are newest first (the FlatList is inverted), so the oldest message is the last one.
+const oldestOf = (list: ChatMessage[]) => (list.length > 0 ? list[list.length - 1].createdAt : null);
 
 /* ─────────────────────── Main Screen ─────────────────────── */
 
@@ -78,7 +93,7 @@ interface ChatroomProps {
 
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
-    const { sendMessage, markRead } = useWebSocketClient();
+    const { connected, sendMessage, markRead } = useWebSocketClient();
     const { refreshUnreadCount } = useUnread();
     const insets = useSafeAreaInsets();
 
@@ -130,8 +145,8 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
                 if (cacheIsFresh && cached.messages.length > 0) {
                     setMessages(cached.messages);
-                    setOldestMessageDate(cached.messages[0]?.createdAt ?? null);
-                    setHasMoreMessages(cached.messages.length >= 50);
+                    setOldestMessageDate(oldestOf(cached.messages));
+                    setHasMoreMessages(cached.messages.length >= PAGE_SIZE);
                 } else {
                     setOldestMessageDate(null);
                     setHasMoreMessages(true);
@@ -150,28 +165,14 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 if (!mounted) return;
 
                 const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-                const normalized: ChatMessage[] = incoming.map((m: any) => ({
-                    id: String(m?.id ?? Date.now()),
-                    text: String(m?.text ?? ''),
-                    sender: m?.sender === 'me' ? 'me' : 'other',
-                    createdAt: String(m?.createdAt ?? new Date().toISOString()),
-                    status:
-                        m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent' || m?.status === 'sending'
-                            ? m.status
-                            : undefined,
-                }));
+                const normalized: ChatMessage[] = incoming.map(toChatMessage);
 
                 setMessages(normalized);
                 writeConversationCache(peerId, normalized);
 
                 // Track oldest message for pagination
-                if (normalized.length > 0) {
-                    const oldestMsg = normalized[0];
-                    setOldestMessageDate(oldestMsg.createdAt);
-                    setHasMoreMessages(normalized.length >= 50);
-                } else {
-                    setHasMoreMessages(false);
-                }
+                setOldestMessageDate(oldestOf(normalized));
+                setHasMoreMessages(normalized.length >= PAGE_SIZE);
             } catch (err: any) {
                 console.log('conversation hydrate error:', err?.message ?? String(err));
             }
@@ -189,20 +190,11 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         try {
             const res = await getConversationMessages(peerId, undefined);
             const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-            const latest: ChatMessage[] = incoming.map((m: any) => ({
-                id: String(m?.id ?? Date.now()),
-                text: String(m?.text ?? ''),
-                sender: m?.sender === 'me' ? 'me' : 'other',
-                createdAt: String(m?.createdAt ?? new Date().toISOString()),
-                status:
-                    m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent'
-                        ? m.status
-                        : undefined,
-            }));
-            if (latest.length === 0) return;
+            const latest: ChatMessage[] = incoming.map(toChatMessage);
+            const oldestLatest = oldestOf(latest);
+            if (!oldestLatest) return;
 
             // Newest first: keep older pages already loaded and messages still being sent.
-            const oldestLatest = latest[latest.length - 1].createdAt;
             const latestIds = new Set(latest.map((m) => m.id));
             setMessages((prev) => {
                 const pending = prev.filter((m) => m.status === 'sending');
@@ -321,21 +313,20 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         }
     });
 
+    // Mark read only when a new incoming message shows up, not on every list change.
+    const lastMarkedReadIdRef = useRef<string | null>(null);
+    const latestOther = messages.find((m) => m.sender === 'other'); // messages[0] is newest
     useEffect(() => {
-        if (!peerId || messages.length === 0) return;
-
-        // Find the newest message from 'other' (messages[0] is newest in inverted list)
-        const latestOther = messages.find(m => m.sender === 'other');
-        if (!latestOther) return;
-
-        markRead(peerId, latestOther.createdAt);
+        if (!peerId || !latestOther || lastMarkedReadIdRef.current === latestOther.id) return;
+        if (!markRead(peerId, latestOther.createdAt)) return; // not connected yet; retried once `connected` flips
+        lastMarkedReadIdRef.current = latestOther.id;
 
         // Allow backend to process the markRead before fetching the new count
         const timer = setTimeout(() => {
             refreshUnreadCount();
         }, 800);
         return () => clearTimeout(timer);
-    }, [markRead, messages, peerId, refreshUnreadCount]);
+    }, [connected, markRead, latestOther, peerId, refreshUnreadCount]);
 
     const initials = useMemo(() => {
         const name = String(user?.username ?? '').trim();
@@ -393,27 +384,20 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 return;
             }
 
-            const normalized: ChatMessage[] = incoming.map((m: any) => ({
-                id: String(m?.id ?? Date.now()),
-                text: String(m?.text ?? ''),
-                sender: m?.sender === 'me' ? 'me' : 'other',
-                createdAt: String(m?.createdAt ?? new Date().toISOString()),
-            }));
+            const normalized: ChatMessage[] = incoming.map(toChatMessage);
 
             setMessages((prev) => {
-                const next = [...prev, ...normalized];
+                const known = new Set(prev.map((m) => m.id));
+                const next = [...prev, ...normalized.filter((m) => !known.has(m.id))];
                 writeConversationCache(peerId, next);
                 return next;
             });
 
-            if (normalized.length > 0) {
-                setOldestMessageDate(normalized[0].createdAt);
-            }
+            setOldestMessageDate(oldestOf(normalized));
 
-            if (normalized.length < 50) {
+            if (normalized.length < PAGE_SIZE) {
                 setHasMoreMessages(false);
             }
-
 
         } catch (err: any) {
             console.log('load more error:', err?.message ?? String(err));
@@ -527,7 +511,6 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 <Text style={styles.headerTitle} numberOfLines={1}>
                     {peerUsername}
                 </Text>
-                <Text style={styles.headerSubtitle}>Online</Text>
             </RippleButton>
 
             {/* More options — ripple */}
