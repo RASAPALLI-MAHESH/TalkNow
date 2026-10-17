@@ -18,8 +18,10 @@ import RippleButton from '@/app/components/RippleButton';
 import MessageBubble from '@/app/components/messageComponent';
 import { useUnread } from '@/Context/UnreadContext';
 import useAuth from '@/hooks/useAuth';
-import { getConversationMessages } from '@/services/AuthService';
 import { useSocketEvents, useWebSocketClient } from '@/services/WebSocketClient';
+import { IdentityChangedError } from '@/services/e2ee/engine';
+import { useConversation, useE2EE, useE2EEEvents } from '@/services/e2ee/E2EEProvider';
+import { LocalMessage } from '@/services/e2ee/localStore';
 import { Ionicons } from '@expo/vector-icons';
 import React, {
     useCallback,
@@ -51,38 +53,23 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
     UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-/* ─────────────────────── Types ─────────────────────── */
+/* ─────────────────────── Notices ─────────────────────── */
 
-export type ChatMessage = {
-    id: string;
-    text: string;
-    sender: 'me' | 'other';
-    createdAt: string;
-    status?: 'sending' | 'sent' | 'delivered' | 'read';
+// What to show for messages that aren't plain text bubbles.
+const noticeFor = (m: LocalMessage, peerName: string): { icon: keyof typeof Ionicons.glyphMap; text: string } | null => {
+    switch (m.kind) {
+        case 'identity_changed':
+            return { icon: 'shield-half-outline', text: `Your security code with ${peerName} changed. Tap to verify.` };
+        case 'undecryptable':
+            return { icon: 'alert-circle-outline', text: `This message couldn't be decrypted. ${peerName} has been asked to send it again.` };
+        case 'other_device':
+            return { icon: 'phone-portrait-outline', text: 'This message was sent to your previous install and can\'t be read here.' };
+        case 'unsupported':
+            return { icon: 'cloud-download-outline', text: 'This message needs a newer version of TalkNow.' };
+        default:
+            return null;
+    }
 };
-
-type ConversationCacheItem = {
-    messages: ChatMessage[];
-    fetchedAt: number;
-};
-
-const CONVERSATION_CACHE_TTL_MS = 2 * 60 * 1000;
-const PAGE_SIZE = 50;
-const conversationCache = new Map<string, ConversationCacheItem>();
-
-const toChatMessage = (m: any): ChatMessage => ({
-    id: String(m?.id ?? Date.now()),
-    text: String(m?.text ?? ''),
-    sender: m?.sender === 'me' ? 'me' : 'other',
-    createdAt: String(m?.createdAt ?? new Date().toISOString()),
-    status:
-        m?.status === 'read' || m?.status === 'delivered' || m?.status === 'sent' || m?.status === 'sending'
-            ? m.status
-            : undefined,
-});
-
-// Lists are newest first (the FlatList is inverted), so the oldest message is the last one.
-const oldestOf = (list: ChatMessage[]) => (list.length > 0 ? list[list.length - 1].createdAt : null);
 
 /* ─────────────────────── Main Screen ─────────────────────── */
 
@@ -93,7 +80,8 @@ interface ChatroomProps {
 
 const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const { user } = useAuth();
-    const { connected, sendMessage, markRead } = useWebSocketClient();
+    const { connected, markRead } = useWebSocketClient();
+    const { engine, state: e2eeState } = useE2EE();
     const { refreshUnreadCount } = useUnread();
     const insets = useSafeAreaInsets();
 
@@ -106,7 +94,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
     const [draft, setDraft] = useState('');
     const [isFocused, setIsFocused] = useState(false);
-    const listRef = useRef<FlatList<ChatMessage>>(null);
+    const listRef = useRef<FlatList<LocalMessage>>(null);
 
     /* Send-button state */
     const sendOpacity = useRef(new Animated.Value(0.35)).current;
@@ -114,229 +102,44 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     /* Input border animation */
     const borderAnim = useRef(new Animated.Value(0)).current;
 
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
-    // Latest list for socket handlers that need to read it outside a state updater.
-    const messagesRef = useRef<ChatMessage[]>([]);
-    useEffect(() => {
-        messagesRef.current = messages;
-    }, [messages]);
-    const [loadingMore, setLoadingMore] = useState(false);
-    const [oldestMessageDate, setOldestMessageDate] = useState<string | null>(null);
-    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+    // Decrypted messages come from the phone's encrypted store, newest first (the list is inverted).
+    const { messages, hasMore, loadMore } = useConversation(peerId);
 
-    // In-memory only: messages are not written to device storage in plain text.
-    // (An encrypted on-device store comes with end-to-end encryption.)
-    const writeConversationCache = useCallback((id: string, nextMessages: ChatMessage[]) => {
-        if (!id) return;
-        conversationCache.set(id, {
-            messages: nextMessages,
-            fetchedAt: Date.now(),
-        });
-    }, []);
+    // Set while a verified contact's security code changed and the user hasn't acknowledged it.
+    const [identityNeedsAck, setIdentityNeedsAck] = useState(false);
+    const [verified, setVerified] = useState(false);
+
+    const refreshTrust = useCallback(async () => {
+        if (!engine || !peerId) return;
+        const trust = await engine.getTrust(peerId);
+        setIdentityNeedsAck(!!trust?.needsAck);
+        setVerified(!!trust?.verified);
+    }, [engine, peerId]);
 
     useEffect(() => {
-        let mounted = true;
+        void refreshTrust().catch(() => undefined);
+    }, [refreshTrust]);
 
-        const hydrateConversation = async () => {
-            if (!peerId) return;
-            try {
-                // Instant open: hydrate from recent in-memory cache first.
-                const cached = conversationCache.get(peerId);
-                const cacheIsFresh =
-                    !!cached && Date.now() - cached.fetchedAt <= CONVERSATION_CACHE_TTL_MS;
+    // Pull read receipts missed while away (and, once, pre-encryption history) when the chat opens.
+    useEffect(() => {
+        if (!engine || !peerId) return;
+        engine.syncConversation(peerId).catch((err) => console.log('conversation sync error:', err?.message ?? String(err)));
+    }, [engine, peerId]);
 
-                if (cacheIsFresh && cached.messages.length > 0) {
-                    setMessages(cached.messages);
-                    setOldestMessageDate(oldestOf(cached.messages));
-                    setHasMoreMessages(cached.messages.length >= PAGE_SIZE);
-                } else {
-                    setOldestMessageDate(null);
-                    setHasMoreMessages(true);
-                }
-
-                const res = await getConversationMessages(peerId, undefined);
-                if (!mounted) return;
-
-                const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-                const normalized: ChatMessage[] = incoming.map(toChatMessage);
-
-                setMessages(normalized);
-                writeConversationCache(peerId, normalized);
-
-                // Track oldest message for pagination
-                setOldestMessageDate(oldestOf(normalized));
-                setHasMoreMessages(normalized.length >= PAGE_SIZE);
-            } catch (err: any) {
-                console.log('conversation hydrate error:', err?.message ?? String(err));
-            }
-        };
-
-        void hydrateConversation();
-        return () => {
-            mounted = false;
-        };
-    }, [peerId, writeConversationCache]);
-
-    /* After a reconnect, merge the latest page so messages sent while offline appear. */
-    const syncLatestMessages = useCallback(async () => {
-        if (!peerId) return;
-        try {
-            const res = await getConversationMessages(peerId, undefined);
-            const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-            const latest: ChatMessage[] = incoming.map(toChatMessage);
-            const oldestLatest = oldestOf(latest);
-            if (!oldestLatest) return;
-
-            // Newest first: keep older pages already loaded and messages still being sent.
-            // A "sending" message whose server copy is already in the latest page was sent
-            // just before the connection dropped (its ack was lost): drop the local copy.
-            const latestIds = new Set(latest.map((m) => m.id));
-            const sentByMe = latest.filter((m) => m.sender === 'me');
-            const SEND_CLOCK_SKEW_MS = 60 * 1000;
-            setMessages((prev) => {
-                const pending = prev.filter(
-                    (m) =>
-                        m.status === 'sending' &&
-                        !sentByMe.some(
-                            (s) =>
-                                s.text === m.text &&
-                                Date.parse(s.createdAt) >= Date.parse(m.createdAt) - SEND_CLOCK_SKEW_MS
-                        )
-                );
-                const older = prev.filter(
-                    (m) => m.status !== 'sending' && !latestIds.has(m.id) && m.createdAt < oldestLatest
-                );
-                const next = [...pending, ...latest, ...older];
-                writeConversationCache(peerId, next);
-                return next;
-            });
-        } catch (err: any) {
-            console.log('conversation sync error:', err?.message ?? String(err));
+    useSocketEvents((event) => {
+        if (event.type === 'registered' && engine && peerId) {
+            engine.syncConversation(peerId).catch(() => undefined);
         }
-    }, [peerId, writeConversationCache]);
+    });
 
-    useSocketEvents((lastMessage) => {
-        const type = String((lastMessage as any)?.type ?? '');
-        if (!type) return;
-
-        if (type === 'registered') {
-            void syncLatestMessages();
-            return;
-        }
-
-        // The server rejected one of our messages (e.g. the connection was removed).
-        if (type === 'error') {
-            const failedId = String((lastMessage as any)?.clientId ?? '');
-            const failed = messagesRef.current.find((m) => m.id === failedId);
-            if (!failedId || !failed) return;
-            setMessages((prev) => {
-                const next = prev.filter((m) => m.id !== failedId);
-                writeConversationCache(peerId, next);
-                return next;
-            });
-            // Give the text back unless the user already started typing something else.
-            setDraft((current) => (current.trim() ? current : failed.text));
-            Alert.alert('Message not sent', String((lastMessage as any)?.message ?? 'Please try again.'));
-            return;
-        }
-
-        const from = String((lastMessage as any)?.from ?? '').trim();
-        const to = String((lastMessage as any)?.to ?? '').trim();
-        const content = String((lastMessage as any)?.content ?? '').trim();
-        const id = String((lastMessage as any)?.id ?? `${Date.now()}_${from}_${to}`);
-        const clientId = String((lastMessage as any)?.clientId ?? '').trim();
-        const date = String((lastMessage as any)?.date ?? new Date().toISOString());
-        const currentUserId = String(user?.id ?? '').trim();
-
-        if (!peerId || !currentUserId) return;
-
-        if (type === 'message_status') {
-            const status = String((lastMessage as any)?.status ?? '').trim();
-            if (status !== 'sent' && status !== 'delivered' && status !== 'read') return;
-
-            setMessages((prev) => {
-                let changed = false;
-                const next = prev.map((m) => {
-                    const idMatch = m.id === id;
-                    const clientMatch = clientId && m.id === clientId;
-                    if (!idMatch && !clientMatch) return m;
-                    changed = true;
-                    return {
-                        ...m,
-                        id: id || m.id,
-                        status: status as ChatMessage['status'],
-                    };
-                });
-                if (!changed) return prev;
-                writeConversationCache(peerId, next);
-                return next;
-            });
-            return;
-        }
-
-        if (type === 'messages_read') {
-            const idsRaw = Array.isArray((lastMessage as any)?.ids) ? (lastMessage as any).ids : [];
-            const ids = new Set(idsRaw.map((x: any) => String(x)));
-            if (ids.size === 0) return;
-
-            setMessages((prev) => {
-                let changed = false;
-                const next = prev.map((m) => {
-                    if (!ids.has(m.id)) return m;
-                    changed = true;
-                    return { ...m, status: 'read' as const };
-                });
-                if (!changed) return prev;
-                writeConversationCache(peerId, next);
-                return next;
-            });
-            return;
-        }
-
-        if (type !== 'new_message' && type !== 'sent') return;
-        if (!content) return;
-
-        const belongsToOpenConversation =
-            (from === currentUserId && to === peerId) ||
-            (from === peerId && to === currentUserId);
-        if (!belongsToOpenConversation) return;
-
-        setMessages((prev) => {
-            // If this is an ack for an optimistic message, upgrade it in place.
-            if (type === 'sent' && clientId) {
-                let changed = false;
-                const upgraded = prev.map((m) => {
-                    if (m.id !== clientId) return m;
-                    changed = true;
-                    return { ...m, id, createdAt: date, status: 'sent' as const };
-                });
-                if (changed) {
-                    writeConversationCache(peerId, upgraded);
-                    return upgraded;
-                }
-            }
-
-            if (prev.some((m) => m.id === id)) return prev;
-            const appended: ChatMessage = {
-                id,
-                text: content,
-                sender: from === currentUserId ? 'me' : 'other',
-                createdAt: date,
-                status: from === currentUserId ? 'sent' : undefined,
-            };
-            const next = [appended, ...prev];
-            writeConversationCache(peerId, next);
-            return next;
-        });
-
-        if (type === 'new_message' && from === peerId && to === currentUserId) {
-            markRead(peerId, date);
-        }
+    useE2EEEvents((e) => {
+        if (e.type === 'trust' && e.peerId === peerId) void refreshTrust().catch(() => undefined);
+        if (e.type === 'send_failed' && e.peerId === peerId) Alert.alert('Message not sent', e.message);
     });
 
     // Mark read only when a new incoming message shows up, not on every list change.
     const lastMarkedReadIdRef = useRef<string | null>(null);
-    const latestOther = messages.find((m) => m.sender === 'other'); // messages[0] is newest
+    const latestOther = messages.find((m) => m.direction === 'in'); // messages[0] is newest
     useEffect(() => {
         if (!peerId || !latestOther || lastMarkedReadIdRef.current === latestOther.id) return;
         if (!markRead(peerId, latestOther.createdAt)) return; // not connected yet; retried once `connected` flips
@@ -392,99 +195,103 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     /* Scroll is automatically handled by inverted={true} */
 
     /* Load older messages when user scrolls to top */
-    const handleLoadMore = useCallback(async () => {
-        if (loadingMore || !hasMoreMessages || !oldestMessageDate || !peerId) return;
-
-        setLoadingMore(true);
-        try {
-            const res = await getConversationMessages(peerId, oldestMessageDate);
-            const incoming = Array.isArray((res as any)?.messages) ? (res as any).messages : [];
-
-            if (incoming.length === 0) {
-                setHasMoreMessages(false);
-                return;
-            }
-
-            const normalized: ChatMessage[] = incoming.map(toChatMessage);
-
-            setMessages((prev) => {
-                const known = new Set(prev.map((m) => m.id));
-                const next = [...prev, ...normalized.filter((m) => !known.has(m.id))];
-                writeConversationCache(peerId, next);
-                return next;
-            });
-
-            setOldestMessageDate(oldestOf(normalized));
-
-            if (normalized.length < PAGE_SIZE) {
-                setHasMoreMessages(false);
-            }
-
-        } catch (err: any) {
-            console.log('load more error:', err?.message ?? String(err));
-        } finally {
-            setLoadingMore(false);
-        }
-    }, [loadingMore, hasMoreMessages, oldestMessageDate, peerId]);
+    const handleLoadMore = useCallback(() => {
+        if (hasMore) loadMore();
+    }, [hasMore, loadMore]);
 
     const handleBack = useCallback(() => {
         Keyboard.dismiss();
         navigation.goBack();
     }, [navigation]);
 
-    const handleSend = useCallback(() => {
+    const openSafetyNumber = useCallback(() => {
+        navigation.navigate('SafetyNumber', { peerId, peerUsername });
+    }, [navigation, peerId, peerUsername]);
+
+    const acknowledgeIdentityChange = useCallback(() => {
+        if (!engine) return;
+        void engine.acknowledgeIdentityChange(peerId).catch(() => undefined);
+    }, [engine, peerId]);
+
+    const handleSend = useCallback(async () => {
         if (!canSend || !peerId) return;
+        if (!engine) {
+            Alert.alert('Encryption unavailable', e2eeState.error || 'Encryption is still starting. Please try again in a moment.');
+            return;
+        }
         const text = draft.trim();
         setDraft('');
-        const clientId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-        setMessages((prev) => {
-            const optimistic: ChatMessage = {
-                id: clientId,
-                text,
-                sender: 'me',
-                createdAt: new Date().toISOString(),
-                status: 'sending',
-            };
-            const next = [optimistic, ...prev];
-            writeConversationCache(peerId, next);
-            return next;
-        });
 
         /* Trigger LayoutAnimation on Android so the composer height change is smooth */
         if (Platform.OS === 'android') {
             LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         }
 
-        /* Quick send confirm */
-        // Send immediately, no animation needed
-
-        const ok = sendMessage(peerId, text, clientId);
-        if (!ok) {
-            // Not connected: drop the bubble and give the text back so the user can resend.
-            setDraft(text);
-            setMessages((prev) => {
-                const next = prev.filter((m) => m.id !== clientId);
-                writeConversationCache(peerId, next);
-                return next;
-            });
+        try {
+            // Encrypted on this phone; offline sends wait and go out after reconnecting.
+            await engine.sendText(peerId, text);
+        } catch (err: any) {
+            // Nothing was saved: give the text back unless the user already started typing something else.
+            setDraft((current) => (current.trim() ? current : text));
+            if (err instanceof IdentityChangedError) {
+                Alert.alert(
+                    'Security code changed',
+                    `${peerUsername}'s security code changed, maybe because they reinstalled TalkNow or got a new phone. Verify it, or tap OK to keep chatting.`,
+                    [
+                        { text: 'Verify', onPress: openSafetyNumber },
+                        { text: 'OK', onPress: acknowledgeIdentityChange },
+                    ]
+                );
+                return;
+            }
+            Alert.alert('Message not sent', String(err?.message || 'Please try again.'));
         }
-    }, [canSend, draft, peerId, sendMessage, writeConversationCache]);
+    }, [canSend, draft, peerId, engine, e2eeState.error, peerUsername, openSafetyNumber, acknowledgeIdentityChange]);
 
-    const renderItem = useCallback(
-        ({ item }: { item: ChatMessage }) => (
-            <MessageBubble
-                id={item.id}
-                text={item.text}
-                sender={item.sender}
-                createdAt={item.createdAt}
-                status={item.status || 'sent'}
-            />
-        ),
-        [],
+    const handleMessagePress = useCallback(
+        (m: LocalMessage) => {
+            if (!engine) return;
+            if (m.kind === 'identity_changed') {
+                openSafetyNumber();
+                return;
+            }
+            if (m.direction === 'out' && m.status === 'failed') {
+                Alert.alert('Message not sent', 'Send it again?', [
+                    { text: 'Delete', style: 'destructive', onPress: () => void engine.deleteMessage(m.id) },
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Retry', onPress: () => void engine.retryMessage(m.id).catch(() => undefined) },
+                ]);
+            }
+        },
+        [engine, openSafetyNumber]
     );
 
-    const keyExtractor = useCallback((item: ChatMessage) => item.id, []);
+    const renderItem = useCallback(
+        ({ item }: { item: LocalMessage }) => {
+            const notice = noticeFor(item, peerUsername);
+            if (notice) {
+                return (
+                    <Pressable style={styles.notice} onPress={() => handleMessagePress(item)} accessibilityRole="text">
+                        <Ionicons name={notice.icon} size={14} color="#7b7b9d" />
+                        <Text style={styles.noticeText}>{notice.text}</Text>
+                    </Pressable>
+                );
+            }
+            return (
+                <MessageBubble
+                    id={item.id}
+                    text={item.text}
+                    sender={item.direction === 'out' ? 'me' : 'other'}
+                    createdAt={item.createdAt}
+                    status={item.status || 'sent'}
+                    onPress={item.status === 'failed' ? () => handleMessagePress(item) : undefined}
+                />
+            );
+        },
+        [peerUsername, handleMessagePress],
+    );
+
+    const keyExtractor = useCallback((item: LocalMessage) => item.id, []);
 
     /* ── Shared Header ── */
     const Header = (
@@ -534,7 +341,38 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 </Text>
             </RippleButton>
 
+            {/* End-to-end encryption: safety number */}
+            <RippleButton
+                onPress={openSafetyNumber}
+                hitSlop={8}
+                borderless
+                style={styles.headerLock}
+                rippleColor="rgba(103,51,208,0.22)"
+                accessibilityLabel={verified ? 'Encrypted and verified. View safety number' : 'End-to-end encrypted. View safety number'}
+            >
+                <Ionicons name={verified ? 'shield-checkmark' : 'lock-closed-outline'} size={20} color="#6733d0" />
+            </RippleButton>
         </View>
+    );
+
+    const IdentityBanner = identityNeedsAck ? (
+        <View style={styles.banner}>
+            <Ionicons name="shield-half-outline" size={18} color="#c2410c" />
+            <Text style={styles.bannerText}>Your security code with {peerUsername} changed.</Text>
+            <Pressable onPress={openSafetyNumber} style={styles.bannerButton} accessibilityRole="button">
+                <Text style={styles.bannerButtonText}>Verify</Text>
+            </Pressable>
+            <Pressable onPress={acknowledgeIdentityChange} style={styles.bannerButton} accessibilityRole="button">
+                <Text style={styles.bannerButtonText}>OK</Text>
+            </Pressable>
+        </View>
+    ) : null;
+
+    const EncryptedHint = (
+        <Pressable style={styles.encryptedHint} onPress={openSafetyNumber} accessibilityRole="button">
+            <Ionicons name="lock-closed" size={12} color="#7b7b9d" />
+            <Text style={styles.noticeText}>Messages are end-to-end encrypted. Only you and {peerUsername} can read them.</Text>
+        </Pressable>
     );
 
     /* ── Shared Composer ── */
@@ -576,7 +414,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
 
                     {/* Send button */}
                     <Pressable
-                        onPress={handleSend}
+                        onPress={() => void handleSend()}
                         disabled={!canSend}
                         style={[styles.sendBtn, { opacity: canSend ? 1 : 0.35 }]}
                         android_ripple={{ color: 'rgba(255,255,255,0.3)', borderless: false }}
@@ -594,6 +432,7 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
     const MainContent = (
         <View style={styles.container}>
             {Header}
+            {IdentityBanner}
 
             <FlatList
                 ref={listRef}
@@ -614,6 +453,8 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
                 onEndReached={handleLoadMore}
                 onEndReachedThreshold={0.5}
                 inverted={true}
+                // Inverted list: the footer sits above the oldest message.
+                ListFooterComponent={hasMore ? null : EncryptedHint}
             />
 
             {Composer}

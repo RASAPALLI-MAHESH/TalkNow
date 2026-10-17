@@ -19,7 +19,7 @@ import { Pressable, StyleSheet, Text, TextStyle, View, ViewStyle } from 'react-n
 
 /* ─────────────────────── Types ─────────────────────── */
 
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read';
+export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface MessageBubbleProps {
     /**
@@ -94,6 +94,8 @@ function getStatusIcon(status?: MessageStatus): string {
             return '✓✓';
         case 'delivered':
             return '✓✓';
+        case 'failed':
+            return '!';
         case 'sent':
         case 'sending':
         default:
@@ -175,8 +177,8 @@ const MessageBubble = memo<MessageBubbleProps>(
 
                 {/* Timestamp + Status */}
                 <View style={[styles.bottomRow, isMe ? styles.bottomRowMe : styles.bottomRowOther]}>
-                    <Text style={styles.timestamp}>
-                        {formatTime(createdAt)}
+                    <Text style={[styles.timestamp, status === 'failed' && isMe && styles.failedText]}>
+                        {status === 'failed' && isMe ? 'Not sent · tap to retry' : formatTime(createdAt)}
                     </Text>
 
                     {/* Status indicator (visible for sent messages) */}
@@ -185,6 +187,7 @@ const MessageBubble = memo<MessageBubbleProps>(
                             style={[
                                 styles.statusIcon,
                                 status === 'read' && styles.statusIconRead,
+                                status === 'failed' && styles.failedText,
                             ]}
                         >
                             {getStatusIcon(status)}
@@ -303,6 +306,10 @@ const styles = StyleSheet.create({
 
     statusIconRead: {
         color: '#6733d0', // Blue check for read
+    },
+
+    failedText: {
+        color: '#ef4444',
     },
 });
 

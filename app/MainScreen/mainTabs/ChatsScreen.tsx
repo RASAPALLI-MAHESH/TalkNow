@@ -17,6 +17,8 @@ import {
     type Relationship,
 } from '@/services/relationships';
 import { useSocketEvents } from '@/services/WebSocketClient';
+import { useE2EE, useE2EEEvents } from '@/services/e2ee/E2EEProvider';
+import { type LocalMessage } from '@/services/e2ee/localStore';
 import { useUnread } from '@/Context/UnreadContext';
 import { API_ORIGIN } from '@/services/config';
 import { Ionicons } from '@expo/vector-icons';
@@ -420,11 +422,26 @@ const GlobalChatRow = ({
     );
 };
 
+// Chat list preview from the phone's own store: the server never has message text.
+const previewOf = (m: LocalMessage): string => {
+    switch (m.kind) {
+        case 'text':
+            return m.text;
+        case 'undecryptable':
+            return "Message couldn't be decrypted";
+        case 'other_device':
+            return 'Message sent to your previous install';
+        default:
+            return 'New message';
+    }
+};
+
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const { refreshUnreadCount } = useUnread();
 
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
+    const { engine } = useE2EE();
 
     const insets = useSafeAreaInsets();
     const horizontalSafePad = 12 + Math.max(insets.left, insets.right);
@@ -451,6 +468,18 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
 
     const apiOrigin = API_ORIGIN;
 
+    // Latest decrypted message per contact, from the local encrypted store.
+    const applyLocalPreviews = useCallback(async (rows: ChatListItem[]) => {
+        if (!engine || rows.length === 0) return rows;
+        const latest = new Map((await engine.getLatestPerPeer()).map((m) => [m.peerId, m]));
+        return rows.map((row) => {
+            const m = latest.get(String(row.id));
+            if (!m) return row;
+            const localNewer = !row.Date || m.createdAt > String(row.Date);
+            return { ...row, lastMessage: previewOf(m), Date: localNewer ? m.createdAt : row.Date };
+        });
+    }, [engine]);
+
     const loadChatsFromInbox = useCallback(async () => {
         if (!currentUserId) {
             setChatRows([]);
@@ -465,17 +494,17 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                 id: String(u.id),
                 name: String(u.username ?? 'User'),
                 profilePicture: typeof u.profilePicture === 'string' ? u.profilePicture : '',
-                lastMessage: typeof u.lastMessage === 'string' && u.lastMessage.trim() ? u.lastMessage : 'New message',
+                lastMessage: 'New message',
                 Date: typeof u.date === 'string' ? u.date : '',
                 unreadCount: typeof u.unreadCount === 'number' ? u.unreadCount : 0,
             }));
 
             // The server's inbox is the full list: chats that were removed or blocked drop out.
-            setChatRows(mergeChatsById(incoming, []));
+            setChatRows(mergeChatsById(await applyLocalPreviews(incoming), []));
         } catch (err: any) {
             console.log('chat inbox hydrate error:', err?.message ?? String(err));
         }
-    }, [currentUserId]);
+    }, [currentUserId, applyLocalPreviews]);
 
     const checkUnreadNotifications = useCallback(async () => {
         if (!currentUserId) {
@@ -536,50 +565,20 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             void loadChatsFromInbox();
             return;
         }
-
-        if (type !== 'new_message' && type !== 'sent') return;
-        
         if (type === 'new_message') refreshUnreadCount();
+    });
 
-        const from = String((lastMessage as any)?.from ?? '').trim();
-        const to = String((lastMessage as any)?.to ?? '').trim();
-        const content = String((lastMessage as any)?.content ?? '').trim();
-        const date = String((lastMessage as any)?.date ?? new Date().toISOString());
-
-        if (!from || !to || !currentUserId) return;
-
-        const peerId = from === currentUserId ? to : from;
-        if (!peerId) return;
-
-        const isIncoming = type === 'new_message';
-
-        const senderName = String((lastMessage as any)?.senderName ?? '');
-        const senderAvatar = String((lastMessage as any)?.senderAvatar ?? '');
-
-        setChatRows((prev) => {
-            const idx = prev.findIndex((row) => String(row.id) === peerId);
-            if (idx === -1) {
-                const created: ChatListItem = {
-                    id: peerId,
-                    name: senderName || 'User',
-                    profilePicture: senderAvatar || '',
-                    lastMessage: content || 'New message',
-                    Date: date,
-                    unreadCount: isIncoming ? 1 : 0,
-                };
-                return mergeChatsById([created], prev);
-            }
-
-            const updated = [...prev];
-            updated[idx] = {
-                ...updated[idx],
-                lastMessage: content || 'New message',
-                Date: date,
-                unreadCount: isIncoming
-                    ? (updated[idx].unreadCount ?? 0) + 1
-                    : updated[idx].unreadCount ?? 0,
-            };
-            return mergeChatsById([], updated);
+    // A message was decrypted, sent or changed: refresh that chat's preview, or the list if the chat is new.
+    useE2EEEvents((event) => {
+        if (event.type !== 'messages') return;
+        const known = chatRows.some((row) => String(row.id) === event.peerId);
+        if (!known) {
+            void loadChatsFromInbox();
+            return;
+        }
+        void applyLocalPreviews(chatRows.filter((row) => String(row.id) === event.peerId)).then(([updated]) => {
+            if (!updated) return;
+            setChatRows((prev) => mergeChatsById([updated], prev));
         });
     });
 

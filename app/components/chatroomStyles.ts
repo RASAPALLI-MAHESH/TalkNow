@@ -244,4 +244,82 @@ export const styles = StyleSheet.create({
             },
         }),
     },
+
+    /* ── Encryption notices ── */
+
+    headerLock: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginLeft: 'auto',
+    },
+
+    notice: {
+        alignSelf: 'center',
+        maxWidth: '88%',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: PURPLE_LIGHT,
+        borderRadius: 12,
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        marginVertical: 6,
+    },
+
+    noticeText: {
+        flexShrink: 1,
+        fontSize: 12,
+        lineHeight: 16,
+        color: INK_MUTED,
+        fontFamily: FONT_REGULAR,
+        textAlign: 'center',
+    },
+
+    banner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        backgroundColor: '#fff7ed',
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: '#fed7aa',
+    },
+
+    bannerText: {
+        flex: 1,
+        fontSize: 13,
+        lineHeight: 18,
+        color: INK,
+        fontFamily: FONT_REGULAR,
+    },
+
+    bannerButton: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 14,
+        backgroundColor: WHITE,
+        borderWidth: 1,
+        borderColor: SEPARATOR,
+    },
+
+    bannerButtonText: {
+        fontSize: 13,
+        color: PURPLE_PRIMARY,
+        fontFamily: FONT_MEDIUM,
+    },
+
+    encryptedHint: {
+        alignSelf: 'center',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: 4,
+        paddingHorizontal: 12,
+        marginTop: 4,
+        marginBottom: 10,
+    },
 });

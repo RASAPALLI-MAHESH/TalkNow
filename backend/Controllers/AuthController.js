@@ -8,6 +8,8 @@ const Connection = require("../models/connection");
 const Notification = require("../models/notification");
 const Block = require("../models/block");
 const Report = require("../models/report");
+const KeyBundle = require("../models/keyBundle");
+const SessionReset = require("../models/sessionReset");
 const bcrypt = require('bcryptjs');
 const { signAuthToken, getJwtSecret } = require("../config/Jwthandling");
 const sendOtp = require("../services/otpService");
@@ -737,7 +739,7 @@ exports.registerPushToken = async (req, res) => {
 /**
  * Permanently deletes the signed-in account after re-checking the password: profile,
  * images, messages (both sides of each conversation), connections, notifications,
- * blocks, the user's own reports and every session. Each step is safe to repeat, so a
+ * blocks, the user's own reports, published encryption keys and every session. Each step is safe to repeat, so a
  * failure part-way can simply be retried.
  */
 exports.deleteAccount = async (req, res) => {
@@ -767,6 +769,8 @@ exports.deleteAccount = async (req, res) => {
             Notification.deleteMany({ $or: [{ toUserId: userId }, { fromUserId: userId }] }),
             Block.deleteMany({ $or: [{ blockerId: userId }, { blockedId: userId }] }),
             Report.deleteMany({ reporterId: userId }),
+            KeyBundle.deleteMany({ userId }),
+            SessionReset.deleteMany({ $or: [{ requesterId: userId }, { targetId: userId }] }),
             OtpModel.deleteMany({ email: user.email }),
             User.updateMany(
                 { $or: [{ followers: userId }, { following: userId }] },

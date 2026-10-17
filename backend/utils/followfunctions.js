@@ -164,7 +164,6 @@ const followUser = async (req, res) => {
                         participants: pair.participants,
                         hasMessages: false,
                         lastMessageAt: null,
-                        lastMessagePreview: '',
                     },
                 },
                 { upsert: true }
@@ -436,7 +435,6 @@ const acceptFollowRequest = async (req, res) => {
                             participants: pair.participants,
                             hasMessages: false,
                             lastMessageAt: null,
-                            lastMessagePreview: '',
                         },
                     },
                     { upsert: true, session }

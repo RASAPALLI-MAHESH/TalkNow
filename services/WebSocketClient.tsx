@@ -14,7 +14,8 @@ type Listener = (message: WsIncomingMessage) => void;
 type WebSocketContextValue = {
     connected: boolean;
     subscribe: (listener: Listener) => () => void;
-    sendMessage: (to: string, content: string, clientId?: string) => boolean;
+    // Sends one JSON message; false when not connected. Chat messages go through the E2EE engine, never directly.
+    send: (payload: Record<string, unknown>) => boolean;
     markRead: (peerId: string, upTo?: string) => boolean;
 };
 
@@ -158,20 +159,14 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
         return true;
     }, []);
 
-    const sendMessage = useCallback(
-        (to: string, content: string, clientId?: string) =>
-            send({ type: 'send_message', to, content, clientId, date: new Date().toISOString() }),
-        [send]
-    );
-
     const markRead = useCallback(
         (peerId: string, upTo?: string) => send({ type: 'mark_read', peerId, upTo }),
         [send]
     );
 
     const value = useMemo(
-        () => ({ connected, subscribe, sendMessage, markRead }),
-        [connected, subscribe, sendMessage, markRead]
+        () => ({ connected, subscribe, send, markRead }),
+        [connected, subscribe, send, markRead]
     );
 
     return <WebSocketContext.Provider value={value}>{children}</WebSocketContext.Provider>;

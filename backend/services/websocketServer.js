@@ -3,11 +3,18 @@ const mongoose = require('mongoose');
 const Message = require('../models/message');
 const Connection = require('../models/connection');
 const User = require('../models/user');
+const KeyBundle = require('../models/keyBundle');
 const { resolveAuthToken } = require('../middleware/authMiddleware');
 const { notifyUser } = require('./pushService');
+const {
+    validateEnvelope,
+    acknowledgeMessages,
+    createSessionReset,
+    acknowledgeResets,
+    isObjectIdString,
+} = require('./e2eeMessaging');
 
 const AUTH_TIMEOUT_MS = 10 * 1000;
-const MAX_CONTENT_CHARS = 4000;
 const CLOSE_UNAUTHORIZED = 4001;
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 
@@ -91,6 +98,13 @@ const emitNotification = (toUserId, payload) => {
 
 const toObjectId = (value) => new mongoose.Types.ObjectId(toSafeId(value));
 
+/** Tells senders that the recipient's phone now has their messages. */
+const emitDeliveryStatuses = (delivered) => {
+    for (const d of delivered) {
+        emitToUser(d.senderId, { type: 'message_status', id: d.id, status: 'delivered', date: d.date });
+    }
+};
+
 /**
  * Attaches a WebSocket server to an existing HTTP server.
  * Render only exposes a single port, so WS must share the same server.
@@ -122,7 +136,13 @@ const attachWebSocketServer = (httpServer) => {
             if (!ws.userId) ws.close(CLOSE_UNAUTHORIZED, 'Authentication required');
         }, AUTH_TIMEOUT_MS);
 
-        ws.on('message', async (raw) => {
+        // One message at a time per socket, so a burst of sends is stored in the order it was sent.
+        let queue = Promise.resolve();
+        ws.on('message', (raw) => {
+            queue = queue.then(() => handleMessage(raw));
+        });
+
+        const handleMessage = async (raw) => {
             let data;
             try {
                 data = JSON.parse(raw.toString());
@@ -149,34 +169,8 @@ const attachWebSocketServer = (httpServer) => {
                     ws.userId = userId;
                     ws.sessionId = auth.sid;
                     addSocket(userId, ws);
+                    // The phone then fetches GET /messages/pending; messages count as delivered once it acks them.
                     ws.send(JSON.stringify({ type: 'registered', userId }));
-
-                    // Mark previously queued messages as delivered when receiver comes online.
-                    const undelivered = await Message.find({
-                        receiverId: toObjectId(userId),
-                        deliveredAt: null,
-                    })
-                        .select('_id senderId')
-                        .lean();
-
-                    if (undelivered.length > 0) {
-                        const ids = undelivered.map((m) => m._id);
-                        const deliveredAt = new Date();
-                        await Message.updateMany(
-                            { _id: { $in: ids }, deliveredAt: null },
-                            { $set: { deliveredAt } }
-                        );
-
-                        const deliveredIso = deliveredAt.toISOString();
-                        for (const m of undelivered) {
-                            emitToUser(String(m.senderId), {
-                                type: 'message_status',
-                                id: String(m._id),
-                                status: 'delivered',
-                                date: deliveredIso,
-                            });
-                        }
-                    }
                     return;
                 }
 
@@ -188,10 +182,9 @@ const attachWebSocketServer = (httpServer) => {
                 if (data?.type === 'send_message') {
                     const to = toSafeId(data.to);
                     const from = ws.userId;
-                    const content = String(data.content || '').trim();
-                    const clientId = data?.clientId ? String(data.clientId) : undefined;
+                    const clientId = data?.clientId ? String(data.clientId).slice(0, 64) : undefined;
                     // Errors carry the client's temporary id so the app knows which message failed.
-                    const sendError = (message) => ws.send(JSON.stringify({ type: 'error', message, clientId }));
+                    const sendError = (message, code) => ws.send(JSON.stringify({ type: 'error', message, code, clientId }));
 
                     if (!isValidObjectId(to) || !isValidObjectId(from)) {
                         sendError('Invalid sender/recipient id');
@@ -203,13 +196,15 @@ const attachWebSocketServer = (httpServer) => {
                         return;
                     }
 
-                    if (!content) {
-                        sendError('Message content is required');
+                    // Plain text is never accepted: only end-to-end encrypted envelopes.
+                    if (data.envelope === undefined && data.content !== undefined) {
+                        sendError('Please update TalkNow to keep chatting.', 'update_required');
                         return;
                     }
 
-                    if (content.length > MAX_CONTENT_CHARS) {
-                        sendError('Message is too long');
+                    const envelope = validateEnvelope(data.envelope);
+                    if (!envelope) {
+                        sendError('Invalid encrypted message', 'invalid_envelope');
                         return;
                     }
 
@@ -227,43 +222,58 @@ const attachWebSocketServer = (httpServer) => {
                         return;
                     }
 
+                    // Encrypted for an install the recipient has since replaced: the sender fetches new keys and retries.
+                    const recipientKeys = await KeyBundle.findOne({ userId: to }).select('registrationId').lean();
+                    if (!recipientKeys) {
+                        sendError('This contact needs to update TalkNow before you can message them.', 'recipient_no_keys');
+                        return;
+                    }
+                    if (recipientKeys.registrationId !== envelope.recipientRegistrationId) {
+                        sendError('Contact changed phones', 'recipient_keys_changed');
+                        return;
+                    }
+
+                    // A re-send of a message the recipient couldn't decrypt: not a new message for counters or pushes.
+                    let resendOf = null;
+                    if (isObjectIdString(data.resendOf)) {
+                        const original = await Message.exists({ _id: data.resendOf, senderId: toObjectId(from), receiverId: toObjectId(to) });
+                        if (original) resendOf = original._id;
+                    }
+
                     const doc = await Message.create({
                         conversationId: acceptedConnection._id,
                         conversationKey: pair.pairKey,
                         participants: pair.participantObjectIds,
                         senderId: new mongoose.Types.ObjectId(from),
                         receiverId: new mongoose.Types.ObjectId(to),
-                        content,
+                        encrypted: true,
+                        envelope,
+                        resendOf,
+                        clientId,
                     });
 
-                    const previewText = content.length > 500 ? content.slice(0, 497) + '...' : content;
-
+                    const connectionUpdate = {
+                        $set: {
+                            hasMessages: true,
+                            lastMessageAt: doc.createdAt || new Date(),
+                        },
+                    };
+                    if (!resendOf) connectionUpdate.$inc = { "participants.$[recipient].unreadCount": 1 };
                     await Connection.updateOne(
                         { pairKey: pair.pairKey },
-                        {
-                            $set: {
-                                hasMessages: true,
-                                lastMessageAt: doc.createdAt || new Date(),
-                                lastMessagePreview: previewText,
-                            },
-                            $inc: {
-                                "participants.$[recipient].unreadCount": 1
-                            }
-                        },
-                        {
-                            arrayFilters: [{ "recipient.userId": new mongoose.Types.ObjectId(to) }]
-                        }
+                        connectionUpdate,
+                        resendOf ? {} : { arrayFilters: [{ "recipient.userId": new mongoose.Types.ObjectId(to) }] }
                     );
 
-                    // Add badge update emission to satisfy Stage 4 requirement
                     emitToUser(to, {
                         type: 'badge_update',
                         connectionId: String(acceptedConnection._id),
                     });
 
                     const senderObj = await User.findById(from).select('username profilePicture').lean();
+                    const date = doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString();
 
-                    const payload = {
+                    emitToUser(to, {
                         type: 'new_message',
                         id: String(doc._id),
                         conversationKey: pair.pairKey,
@@ -271,20 +281,29 @@ const attachWebSocketServer = (httpServer) => {
                         from,
                         senderName: senderObj?.username,
                         senderAvatar: senderObj?.profilePicture,
-                        content,
-                        clientId,
-                        date: doc.createdAt ? new Date(doc.createdAt).toISOString() : new Date().toISOString(),
-                    };
-
-                    const deliveredNow = emitToUser(to, payload);
-                    notifyUser(to, {
-                        title: senderObj?.username || 'TalkNow',
-                        body: 'New message',
-                        data: { type: 'message', peerId: from, peerUsername: senderObj?.username, peerAvatar: senderObj?.profilePicture },
+                        envelope,
+                        resendOf: resendOf ? String(resendOf) : undefined,
+                        date,
                     });
+                    if (!resendOf) {
+                        // Never the message text: the server doesn't have it.
+                        notifyUser(to, {
+                            title: senderObj?.username || 'TalkNow',
+                            body: 'New message',
+                            data: { type: 'message', peerId: from, peerUsername: senderObj?.username, peerAvatar: senderObj?.profilePicture },
+                        });
+                    }
 
                     if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'sent', ...payload }));
+                        ws.send(JSON.stringify({
+                            type: 'sent',
+                            id: String(doc._id),
+                            clientId,
+                            conversationKey: pair.pairKey,
+                            to,
+                            from,
+                            date,
+                        }));
                         ws.send(JSON.stringify({
                             type: 'message_status',
                             id: String(doc._id),
@@ -292,24 +311,28 @@ const attachWebSocketServer = (httpServer) => {
                             status: 'sent',
                         }));
                     }
+                    return;
+                }
 
-                    if (deliveredNow) {
-                        const deliveredAt = new Date();
-                        await Message.updateOne(
-                            { _id: doc._id, deliveredAt: null },
-                            { $set: { deliveredAt } }
-                        );
+                // The phone stored these messages (decrypted or not): drop the ciphertext, mark delivered.
+                if (data?.type === 'ack') {
+                    const delivered = await acknowledgeMessages(ws.userId, data.ids);
+                    emitDeliveryStatuses(delivered);
+                    if (Array.isArray(data.resetIds) && data.resetIds.length > 0) await acknowledgeResets(ws.userId, data.resetIds);
+                    return;
+                }
 
-                        if (ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({
-                                type: 'message_status',
-                                id: String(doc._id),
-                                clientId,
-                                status: 'delivered',
-                                date: deliveredAt.toISOString(),
-                            }));
-                        }
+                // We couldn't decrypt some of `to`'s messages: ask them for a fresh session and a re-send.
+                if (data?.type === 'session_reset') {
+                    const to = toSafeId(data.to);
+                    if (!isValidObjectId(to) || to === ws.userId) {
+                        ws.send(JSON.stringify({ type: 'error', message: 'Invalid session reset' }));
+                        return;
                     }
+                    const pair = normalizePair(ws.userId, to);
+                    if (!(await Connection.exists({ pairKey: pair.pairKey, status: 'accepted' }))) return;
+                    const reset = await createSessionReset(ws.userId, to, data.messageIds);
+                    if (reset) emitToUser(to, { type: 'session_reset', ...reset });
                     return;
                 }
 
@@ -387,7 +410,7 @@ const attachWebSocketServer = (httpServer) => {
                     ws.send(JSON.stringify({ type: 'error', message: 'Failed to process message' }));
                 }
             }
-        });
+        };
 
         ws.on('close', () => {
             clearTimeout(authTimer);
@@ -399,4 +422,4 @@ const attachWebSocketServer = (httpServer) => {
 };
 
 
-module.exports = { attachWebSocketServer, emitToUser, emitNotification, disconnectSessions };
+module.exports = { attachWebSocketServer, emitToUser, emitNotification, disconnectSessions, emitDeliveryStatuses };

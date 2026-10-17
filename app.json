@@ -3,7 +3,7 @@
   "expo": {
     "name": "TalkNow",
     "slug": "TalkNow",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "talknow",
@@ -13,7 +13,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.talknow.app",
       "config": {
-        "usesNonExemptEncryption": false
+        "usesNonExemptEncryption": true
       }
     },
     "android": {
@@ -29,7 +29,8 @@
       "predictiveBackGestureEnabled": false,
       "blockedPermissions": [
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "allowBackup": false
     },
     "web": {
       "output": "single",
@@ -61,6 +62,20 @@
         "expo-notifications",
         {
           "defaultChannel": "default"
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "TalkNow uses the camera to scan a contact's safety number QR code.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ]
     ],
