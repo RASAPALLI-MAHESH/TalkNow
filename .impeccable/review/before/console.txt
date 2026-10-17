@@ -1,0 +1,22 @@
+[light/iphone/signup] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[light/iphone/signup] Failed to load resource: net::ERR_FAILED
+[light/iphone/forgot] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[light/iphone/forgot] Failed to load resource: net::ERR_FAILED
+[light/android/login] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[light/android/login] Failed to load resource: net::ERR_FAILED
+[light/android/signup] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[light/android/signup] Failed to load resource: net::ERR_FAILED
+[light/android/forgot] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[light/android/forgot] Failed to load resource: net::ERR_FAILED
+[dark/iphone/login] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[dark/iphone/login] Failed to load resource: net::ERR_FAILED
+[dark/iphone/signup] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[dark/iphone/signup] Failed to load resource: net::ERR_FAILED
+[dark/iphone/forgot] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[dark/iphone/forgot] Failed to load resource: net::ERR_FAILED
+[dark/android/login] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[dark/android/login] Failed to load resource: net::ERR_FAILED
+[dark/android/signup] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[dark/android/signup] Failed to load resource: net::ERR_FAILED
+[dark/android/forgot] Access to XMLHttpRequest at 'https://talknow-nd2i.onrender.com/api/health' from origin 'http://localhost:8099' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+[dark/android/forgot] Failed to load resource: net::ERR_FAILED

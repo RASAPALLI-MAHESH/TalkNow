@@ -14,8 +14,8 @@
  */
 
 import AvatarPicker from '@/app/components/AvatarPicker';
-import RippleButton from '@/app/components/RippleButton';
 import MessageBubble from '@/app/components/messageComponent';
+import RippleButton from '@/app/components/RippleButton';
 import { useUnread } from '@/Context/UnreadContext';
 import useAuth from '@/hooks/useAuth';
 import { useSocketEvents, useWebSocketClient } from '@/services/WebSocketClient';
@@ -466,18 +466,14 @@ const Chatroom = ({ navigation, route }: ChatroomProps) => {
         <>
             <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
             <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-                {Platform.OS === 'ios' ? (
-                    <KeyboardAvoidingView
-                        style={styles.safe}
-                        behavior="padding"
-                        keyboardVerticalOffset={0}
-                        enabled
-                    >
-                        {MainContent}
-                    </KeyboardAvoidingView>
-                ) : (
-                    MainContent
-                )}
+                <KeyboardAvoidingView
+                    style={styles.safe}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    keyboardVerticalOffset={0}
+                    enabled
+                >
+                    {MainContent}
+                </KeyboardAvoidingView>
             </SafeAreaView>
         </>
     );
