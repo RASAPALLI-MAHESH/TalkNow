@@ -1,30 +1,21 @@
+import { Button, TextField } from "@/app/components/ui";
 import useAuth from "@/hooks/useAuth";
 import { getAuthErrorMessage } from "@/services/AuthService";
 import { PRIVACY_POLICY_URL, TERMS_URL } from "@/services/config";
-import { useState } from "react";
-import {
-    ActivityIndicator,
-    Alert,
-    Keyboard,
-    KeyboardAvoidingView,
-    Linking,
-    Platform,
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
-} from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { authStyles, AUTH_COLORS } from "./authStyles";
+import { makeStyles } from "@/src/theme";
+import { useRef, useState } from "react";
+import { Alert, Linking, Text, TextInput } from "react-native";
+import AuthScaffold, { AuthFooterLink } from "./AuthScaffold";
 
 const SignUpScreen = ({navigation} : {navigation : any}) => {
+    const s = useStyles();
     const { sendSignupOtp } = useAuth();
     const [name, setname] = useState("");
     const [email, setemail] = useState("");
     const [loading, setLoading] = useState(false);
-    
+    const [emailTouched, setEmailTouched] = useState(false);
+    const emailRef = useRef<TextInput>(null);
+
     const trimmedName = name.trim();
     const trimmedEmail = email.trim();
     const isValidEmail = /^\S+@\S+\.\S+$/.test(trimmedEmail);
@@ -43,78 +34,74 @@ const SignUpScreen = ({navigation} : {navigation : any}) => {
         }
     }
     return (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <KeyboardAvoidingView
-                style={authStyles.screen}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                    <View style={authStyles.iconWrap}>
-                        <Ionicons name="person-add-outline" size={26} color="#710b8d" />
-                    </View>
-                    <Text style={authStyles.title}>{"Create an account"}</Text>
-                    <Text style={authStyles.subtitle}>Get started by filling out your details below.</Text>
-
-                    <Text style={authStyles.label}>First Name</Text>
-                    <TextInput
-                        placeholder="Enter your first name"
-                        placeholderTextColor={AUTH_COLORS.placeholder}
-                        style={authStyles.input}
-                        value={name}
-                        onChangeText={setname}
-                        returnKeyType="next"
-                    />
-
-                    <Text style={authStyles.label}>Email</Text>
-                    <TextInput
-                        placeholder="talknow@example.com"
-                        placeholderTextColor={AUTH_COLORS.placeholder}
-                        style={authStyles.input}
-                        value={email}
-                        onChangeText={setemail}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        keyboardType="email-address"
-                        returnKeyType="done"
-                        onSubmitEditing={() => {
-                            if (!loading && isFormValid) void handleVerify();
-                        }}
-                    />
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            authStyles.button,
-                            pressed && authStyles.buttonPressed,
-                            (!isFormValid || loading) && authStyles.buttonDisabled
-                        ]}
-                        onPress={handleVerify}
-                        disabled={!isFormValid || loading}
-                    >
-                        {loading ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={authStyles.buttonText}>Verify Email</Text>
-                        )}
-                    </Pressable>
-
+        <AuthScaffold
+            icon="person-add-outline"
+            title="Create an account"
+            subtitle="Get started by filling out your details below."
+            onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
+            step={{ step: 1, of: 4 }}
+            footer={
+                <>
                     {/* The app stores require users to accept the terms before using a chat app. */}
-                    <Text style={[authStyles.bottomText, { marginTop: 16, textAlign: 'center' }]}>
+                    <Text style={s.legal}>
                         By continuing, you agree to TalkNow&apos;s{' '}
-                        <Text style={authStyles.link} onPress={() => TERMS_URL && Linking.openURL(TERMS_URL).catch(() => {})}>Terms of Use</Text>
+                        <Text style={s.link} accessibilityRole="link" onPress={() => TERMS_URL && Linking.openURL(TERMS_URL).catch(() => {})}>Terms of Use</Text>
                         {' '}and{' '}
-                        <Text style={authStyles.link} onPress={() => PRIVACY_POLICY_URL && Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})}>Privacy Policy</Text>
+                        <Text style={s.link} accessibilityRole="link" onPress={() => PRIVACY_POLICY_URL && Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})}>Privacy Policy</Text>
                         . There is no tolerance for abusive content or users.
                     </Text>
-
-                    <View style={authStyles.bottomTextContainer}>
-                        <Text style={authStyles.bottomText}>
-                            Already have an account?{' '}
-                            <Text style={authStyles.link} onPress={() => navigation.navigate('Login')}>Login</Text>
-                        </Text>
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </TouchableWithoutFeedback>
+                    <AuthFooterLink prompt="Already have an account?" action="Login" onPress={() => navigation.navigate('Login')} />
+                </>
+            }
+        >
+            <TextField
+                label="First Name"
+                placeholder="Enter your first name"
+                value={name}
+                onChangeText={setname}
+                autoComplete="given-name"
+                textContentType="givenName"
+                returnKeyType="next"
+                onSubmitEditing={() => emailRef.current?.focus()}
+                testID="signup-name"
+            />
+            <TextField
+                ref={emailRef}
+                label="Email"
+                placeholder="talknow@example.com"
+                value={email}
+                onChangeText={setemail}
+                onBlur={() => setEmailTouched(true)}
+                error={emailTouched && trimmedEmail.length > 0 && !isValidEmail ? "Enter a valid email address." : undefined}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                textContentType="emailAddress"
+                keyboardType="email-address"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                    if (!loading && isFormValid) void handleVerify();
+                }}
+                testID="signup-email"
+            />
+            <Button title="Verify Email" onPress={handleVerify} loading={loading} disabled={!isFormValid} style={s.submit} testID="signup-submit" />
+        </AuthScaffold>
     );
 };
+
+const useStyles = makeStyles((t) => ({
+    submit: {
+        marginTop: t.space.sm,
+    },
+    legal: {
+        ...t.type.footnote,
+        color: t.colors.secondaryLabel,
+        textAlign: 'center',
+    },
+    link: {
+        color: t.colors.tintText,
+        fontWeight: '600',
+    },
+}));
+
 export default SignUpScreen;

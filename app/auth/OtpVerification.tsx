@@ -1,38 +1,33 @@
+import { Button } from '@/app/components/ui';
 import useAuth from '@/hooks/useAuth';
 import { getAuthErrorMessage } from '@/services/AuthService';
+import { makeStyles } from '@/src/theme';
 import React, { useState } from 'react';
-import {
-    ActivityIndicator,
-    Alert,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { authStyles, AUTH_COLORS } from './authStyles';
+import { Alert, Text } from 'react-native';
+import AuthScaffold, { AuthFooterLink } from './AuthScaffold';
+import OtpCodeField from './OtpCodeField';
+import { useResendCooldown } from './useResendCooldown';
 
 const OtpVerification = ({ route, navigation } : { route: any, navigation : any }) => {
-    const { verifySignupOtp } = useAuth();
+    const s = useStyles();
+    const { verifySignupOtp, sendSignupOtp } = useAuth();
     const [otp , setOtp] = useState("");
     const [loading, setLoading] = useState(false);
-    
+    const [resending, setResending] = useState(false);
+    const cooldown = useResendCooldown();
+
     const email = route?.params?.email || "";
     const Firstname = route?.params?.Firstname || "";
 
     const normalizedOtp = otp.replace(/\D/g, '').slice(0, 6);
     const otpFilled = normalizedOtp.length === 6;
 
-    const handleVerifyOtp = async () => {
+    const handleVerifyOtp = async (code = normalizedOtp) => {
+        if (loading || code.length !== 6) return;
         try {
             setLoading(true);
-            await verifySignupOtp(email, normalizedOtp);
-            navigation.navigate("AvatarandAge", { Firstname, email, otp: normalizedOtp });
+            await verifySignupOtp(email, code);
+            navigation.navigate("AvatarandAge", { Firstname, email, otp: code });
         } catch (error: any) {
             Alert.alert("Error", getAuthErrorMessage(error, "Invalid OTP. Please try again."));
         } finally {
@@ -40,59 +35,59 @@ const OtpVerification = ({ route, navigation } : { route: any, navigation : any 
         }
     };
 
+    const handleResend = async () => {
+        if (!cooldown.ready || resending || !email) return;
+        try {
+            setResending(true);
+            await sendSignupOtp(email);
+            cooldown.restart();
+            setOtp("");
+        } catch (error: any) {
+            Alert.alert("Couldn't resend", getAuthErrorMessage(error, "Please try again in a moment."));
+        } finally {
+            setResending(false);
+        }
+    };
+
     return (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <KeyboardAvoidingView
-                style={authStyles.screen}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                    <View style={authStyles.iconWrap}>
-                        <Ionicons name="mail-open-outline" size={26} color="#710b8d" />
-                    </View>
-                    <Text style={authStyles.title}>OTP Verification</Text>
-                    <Text style={authStyles.subtitle}>Enter the 6-digit code sent to {email}</Text>
-
-                    <Text style={authStyles.label}>OTP Code</Text>
-                    <TextInput
-                        placeholder="000000"
-                        placeholderTextColor={AUTH_COLORS.placeholder}
-                        style={authStyles.input}
-                        value={otp}
-                        onChangeText={(text) => setOtp(text.replace(/\D/g, '').slice(0, 6))}
-                        keyboardType="numeric"
-                        maxLength={6}
-                        returnKeyType="done"
-                        onSubmitEditing={() => {
-                            if (!loading && otpFilled) void handleVerifyOtp();
-                        }}
-                    />
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            authStyles.button,
-                            pressed && authStyles.buttonPressed,
-                            (!otpFilled || loading) && authStyles.buttonDisabled
-                        ]}
-                        onPress={handleVerifyOtp}
-                        disabled={!otpFilled || loading}
-                    >
-                        {loading ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={authStyles.buttonText}>Verify OTP</Text>
-                        )}
-                    </Pressable>
-
-                    <View style={authStyles.bottomTextContainer}>
-                        <Text style={authStyles.bottomText}>
-                            Wrong email?{' '}
-                            <Text style={authStyles.link} onPress={() => navigation.navigate('SignUp')}>Go back</Text>
-                        </Text>
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </TouchableWithoutFeedback>
+        <AuthScaffold
+            icon="mail-open-outline"
+            title="OTP Verification"
+            subtitle={<>Enter the 6-digit code sent to <Text style={s.email}>{email}</Text></>}
+            onBack={() => navigation.goBack()}
+            step={{ step: 2, of: 4 }}
+            footer={<AuthFooterLink prompt="Wrong email?" action="Go back" onPress={() => navigation.navigate('SignUp')} />}
+        >
+            <OtpCodeField value={otp} onChange={setOtp} onComplete={(code) => void handleVerifyOtp(code)} testID="otp-input" />
+            <Text style={s.resend} accessibilityLiveRegion="polite">
+                {cooldown.ready ? (
+                    <Text style={s.link} onPress={() => void handleResend()} accessibilityRole="button">
+                        {resending ? 'Sending…' : 'Send a new code'}
+                    </Text>
+                ) : (
+                    `You can request a new code in ${cooldown.left}s`
+                )}
+            </Text>
+            <Button title="Verify OTP" onPress={() => void handleVerifyOtp()} loading={loading} disabled={!otpFilled} testID="otp-submit" />
+        </AuthScaffold>
     )
 };
+
+const useStyles = makeStyles((t) => ({
+    email: {
+        color: t.colors.label,
+        fontWeight: '600',
+    },
+    resend: {
+        ...t.type.footnote,
+        color: t.colors.secondaryLabel,
+        textAlign: 'center',
+        marginBottom: t.space.sm,
+    },
+    link: {
+        color: t.colors.tintText,
+        fontWeight: '600',
+    },
+}));
+
 export default OtpVerification;

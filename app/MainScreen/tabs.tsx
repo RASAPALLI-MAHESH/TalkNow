@@ -1,4 +1,5 @@
-import { Ionicons } from '@expo/vector-icons';
+import { GlassTabBar } from '@/app/components/ui';
+import { useTheme } from '@/src/theme';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import React from 'react';
 
@@ -14,37 +15,25 @@ export type MainTabParamList = {
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+const TAB_ICONS = {
+    Chats: { on: 'chatbubble-ellipses', off: 'chatbubble-ellipses-outline' },
+    Settings: { on: 'settings', off: 'settings-outline' },
+} as const;
+
 const MainTabs = () => {
     const { totalUnread } = useUnread();
+    const { colors } = useTheme();
     return (
         <Tab.Navigator
-            screenOptions={({ route }) => ({
+            // Screens scroll beneath the floating glass capsule.
+            tabBar={(props) => <GlassTabBar {...props} icons={TAB_ICONS} badges={{ Chats: totalUnread }} />}
+            screenOptions={{
                 headerShown: false,
-                tabBarActiveTintColor: '#6733d0',
-                tabBarInactiveTintColor: '#666',
-                tabBarIcon: ({ focused, color, size }) => {
-                    let iconName: keyof typeof Ionicons.glyphMap;
-
-                    switch (route.name) {
-                        case 'Chats':
-                            iconName = focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline';
-                            break;
-                        case 'Settings':
-                            iconName = focused ? 'settings' : 'settings-outline';
-                            break;
-                        default:
-                            iconName = 'ellipse';
-                    }
-
-                    return <Ionicons name={iconName} size={size} color={color} />;
-                },
-            })}
+                sceneStyle: { backgroundColor: colors.ground },
+                animation: 'fade',
+            }}
         >
-            <Tab.Screen 
-                name="Chats" 
-                component={ChatsScreen}
-                options={{ tabBarBadge: totalUnread > 0 ? totalUnread : undefined }}
-            />
+            <Tab.Screen name="Chats" component={ChatsScreen} />
             <Tab.Screen name="Settings" component={SettingsScreen} />
         </Tab.Navigator>
     );

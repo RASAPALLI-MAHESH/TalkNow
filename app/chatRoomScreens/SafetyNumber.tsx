@@ -1,24 +1,24 @@
-import RippleButton from '@/app/components/RippleButton';
+import { Button, IconButton, NavBar, Notice, haptics, useNavBarHeight, useScrollEdge } from '@/app/components/ui';
 import { SafetyNumber as SafetyNumberData, compareScannedSafetyNumber } from '@/services/crypto';
 import { useE2EE, useE2EEEvents } from '@/services/e2ee/E2EEProvider';
-import { Ionicons } from '@expo/vector-icons';
+import { makeStyles, useTheme } from '@/src/theme';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, InteractionManager, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, InteractionManager, Modal, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-const PURPLE = '#6733d0';
-const INK = '#1a1a2e';
-const MUTED = '#7b7b9d';
-const BG = '#f8f5ff';
-const GREEN = '#16a34a';
+import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /**
  * Shows the safety number for one contact. Matching numbers (compared in person, or by
  * scanning each other's QR code) prove nobody is sitting between the two phones.
  */
 const SafetyNumber = ({ navigation, route }: { navigation: any; route: any }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
+    const insets = useSafeAreaInsets();
+    const navHeight = useNavBarHeight();
+    const { scrollY, onScroll } = useScrollEdge();
     const peerId = String(route?.params?.peerId ?? '').trim();
     const peerUsername = String(route?.params?.peerUsername ?? 'this contact').trim() || 'this contact';
     const { engine } = useE2EE();
@@ -77,8 +77,10 @@ const SafetyNumber = ({ navigation, route }: { navigation: any; route: any }) =>
             const result = compareScannedSafetyNumber(number, data);
             if (result === 'match') {
                 void markVerified(true);
+                haptics.success();
                 Alert.alert('Verified', `Your messages with ${peerUsername} are end-to-end encrypted and the codes match.`);
             } else if (result === 'mismatch') {
+                haptics.warning();
                 Alert.alert(
                     "Codes don't match",
                     `Make sure you scanned ${peerUsername}'s code for this chat. If it still doesn't match, someone may be intercepting your messages, or one of you reinstalled TalkNow.`
@@ -91,104 +93,116 @@ const SafetyNumber = ({ navigation, route }: { navigation: any; route: any }) =>
     );
 
     return (
-        <SafeAreaView style={styles.safe} edges={['top', 'left', 'right', 'bottom']}>
-            <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-            <View style={styles.header}>
-                <RippleButton onPress={() => navigation.goBack()} hitSlop={12} borderless style={styles.headerIcon} accessibilityLabel="Go back">
-                    <Ionicons name="arrow-back" size={22} color={INK} />
-                </RippleButton>
-                <Text style={styles.headerTitle}>Safety number</Text>
-            </View>
-
-            <ScrollView contentContainerStyle={styles.content}>
+        <View style={s.screen}>
+            <Animated.ScrollView
+                onScroll={onScroll}
+                scrollEventThrottle={16}
+                contentContainerStyle={[s.content, { paddingTop: navHeight + 16, paddingBottom: Math.max(insets.bottom, 16) + 24 }]}
+            >
                 {loading ? (
-                    <ActivityIndicator color={PURPLE} style={{ marginTop: 48 }} />
+                    <ActivityIndicator color={colors.tintText} style={{ marginTop: 48 }} accessibilityLabel="Loading safety number" />
                 ) : !number ? (
-                    <View style={styles.card}>
-                        <Ionicons name="lock-closed-outline" size={28} color={PURPLE} />
-                        <Text style={styles.body}>
-                            Send or receive a message with {peerUsername} first. Their security code appears here once your
-                            phones have exchanged keys.
-                        </Text>
-                    </View>
+                    <Notice icon="lock-closed-outline" style={s.waiting}>
+                        Send or receive a message with {peerUsername} first. Their security code appears here once your
+                        phones have exchanged keys.
+                    </Notice>
                 ) : (
                     <>
-                        <View style={[styles.status, verified && styles.statusVerified]}>
-                            <Ionicons name={verified ? 'shield-checkmark' : 'lock-closed'} size={16} color={verified ? GREEN : PURPLE} />
-                            <Text style={[styles.statusText, verified && { color: GREEN }]}>
-                                {verified ? `You verified ${peerUsername}` : 'End-to-end encrypted'}
-                            </Text>
+                        <Notice
+                            tone={verified ? 'success' : 'neutral'}
+                            icon={verified ? 'shield-checkmark' : 'lock-closed'}
+                            style={s.status}
+                        >
+                            {verified ? `You verified ${peerUsername}` : 'End-to-end encrypted'}
+                        </Notice>
+
+                        <View style={s.card}>
+                            <View style={s.qrWrap}>
+                                <QRCode value={number.qrPayload} size={196} color="#1a1a2e" backgroundColor="#ffffff" />
+                            </View>
+                            <View style={s.digits} accessible accessibilityLabel={`Safety number: ${number.groups.join(' ')}`}>
+                                {number.groups.map((group, i) => (
+                                    <Text key={i} style={s.group}>
+                                        {group}
+                                    </Text>
+                                ))}
+                            </View>
                         </View>
 
-                        <View style={styles.qrWrap}>
-                            <QRCode value={number.qrPayload} size={200} color={INK} backgroundColor="#ffffff" />
-                        </View>
-
-                        <View style={styles.digits} accessible accessibilityLabel={`Safety number: ${number.groups.join(' ')}`}>
-                            {number.groups.map((group, i) => (
-                                <Text key={i} style={styles.group}>
-                                    {group}
-                                </Text>
-                            ))}
-                        </View>
-
-                        <Text style={styles.body}>
+                        <Text style={s.body}>
                             To check that your chat with {peerUsername} is private, compare these numbers with the ones on
                             their phone, or scan their code. If they match, nobody can read your messages but the two of you.
                         </Text>
 
-                        <Pressable style={styles.primary} onPress={() => void startScan()} accessibilityRole="button">
-                            <Ionicons name="qr-code-outline" size={18} color="#fff" />
-                            <Text style={styles.primaryText}>Scan {peerUsername}&apos;s code</Text>
-                        </Pressable>
-                        <Pressable style={styles.secondary} onPress={() => void markVerified(!verified)} accessibilityRole="button">
-                            <Text style={styles.secondaryText}>{verified ? 'Clear verification' : 'Mark as verified'}</Text>
-                        </Pressable>
+                        <View style={s.actions}>
+                            <Button icon="qr-code-outline" title={`Scan ${peerUsername}'s code`} onPress={() => void startScan()} />
+                            <Button
+                                variant="plain"
+                                title={verified ? 'Clear verification' : 'Mark as verified'}
+                                onPress={() => void markVerified(!verified)}
+                            />
+                        </View>
                     </>
                 )}
-            </ScrollView>
+            </Animated.ScrollView>
 
-            <Modal visible={scanning} animationType="slide" onRequestClose={() => setScanning(false)}>
-                <View style={styles.scanner}>
+            <NavBar title="Safety number" onBack={() => navigation.goBack()} scrollY={scrollY} />
+
+            <Modal visible={scanning} animationType="slide" onRequestClose={() => setScanning(false)} statusBarTranslucent>
+                <View style={s.scanner}>
                     <CameraView
                         style={StyleSheet.absoluteFill}
                         facing="back"
                         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
                         onBarcodeScanned={onScanned}
                     />
-                    <View style={styles.scanFrame} pointerEvents="none" />
-                    <Pressable style={styles.scanClose} onPress={() => setScanning(false)} accessibilityRole="button" accessibilityLabel="Close scanner">
-                        <Ionicons name="close" size={28} color="#fff" />
-                    </Pressable>
-                    <Text style={styles.scanHint}>Point at the code on {peerUsername}&apos;s phone</Text>
+                    <View style={s.scanFrame} pointerEvents="none" />
+                    <IconButton
+                        name="close"
+                        variant="glass"
+                        color="#ffffff"
+                        onPress={() => setScanning(false)}
+                        accessibilityLabel="Close scanner"
+                        style={[s.scanClose, { top: insets.top + 8 }]}
+                    />
+                    <Text style={[s.scanHint, { bottom: insets.bottom + 48 }]}>Point at the code on {peerUsername}&apos;s phone</Text>
                 </View>
             </Modal>
-        </SafeAreaView>
+        </View>
     );
 };
 
-const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: BG },
-    header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 8, gap: 8 },
-    headerIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-    headerTitle: { fontSize: 18, fontWeight: '600', color: INK },
-    content: { padding: 20, alignItems: 'center', gap: 18 },
-    card: { alignItems: 'center', gap: 12, padding: 24, backgroundColor: '#fff', borderRadius: 16, marginTop: 24 },
-    status: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14, backgroundColor: '#ede6ff' },
-    statusVerified: { backgroundColor: '#dcfce7' },
-    statusText: { fontSize: 13, fontWeight: '600', color: PURPLE },
-    qrWrap: { padding: 16, backgroundColor: '#fff', borderRadius: 16 },
-    digits: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', width: 280, rowGap: 6 },
-    group: { width: 70, textAlign: 'center', fontSize: 18, letterSpacing: 1, color: INK, fontVariant: ['tabular-nums'] },
-    body: { fontSize: 14, lineHeight: 20, color: MUTED, textAlign: 'center' },
-    primary: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: PURPLE, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24 },
-    primaryText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-    secondary: { paddingHorizontal: 16, paddingVertical: 10 },
-    secondaryText: { color: PURPLE, fontSize: 15, fontWeight: '600' },
+const useStyles = makeStyles((t) => ({
+    screen: { flex: 1, backgroundColor: t.colors.ground },
+    content: { paddingHorizontal: t.space.xl, alignItems: 'center', gap: t.space.xl },
+    waiting: { marginTop: t.space.xxl, alignSelf: 'stretch' },
+    status: { alignSelf: 'center' },
+    card: {
+        alignItems: 'center',
+        gap: t.space.xl,
+        padding: t.space.xl,
+        borderRadius: t.radius.xxl,
+        backgroundColor: t.colors.surface,
+        alignSelf: 'stretch',
+    },
+    // The code stays dark on white in both appearances so any camera can read it.
+    qrWrap: { padding: t.space.md, backgroundColor: '#ffffff', borderRadius: t.radius.lg },
+    digits: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', width: 288, rowGap: t.space.sm },
+    group: {
+        width: 72,
+        textAlign: 'center',
+        ...t.type.title3,
+        fontWeight: '500',
+        letterSpacing: 1,
+        color: t.colors.label,
+        fontVariant: ['tabular-nums'],
+    },
+    body: { ...t.type.subhead, lineHeight: 21, color: t.colors.secondaryLabel, textAlign: 'center' },
+    actions: { alignSelf: 'stretch', gap: t.space.xs },
     scanner: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
-    scanFrame: { width: 240, height: 240, borderWidth: 3, borderColor: '#fff', borderRadius: 20 },
-    scanClose: { position: 'absolute', top: 56, right: 20, padding: 8 },
-    scanHint: { position: 'absolute', bottom: 80, color: '#fff', fontSize: 15 },
-});
+    scanFrame: { width: 240, height: 240, borderWidth: 3, borderColor: '#fff', borderRadius: t.radius.xxl },
+    scanClose: { position: 'absolute', right: t.space.lg },
+    scanHint: { position: 'absolute', ...t.type.subhead, color: '#fff', textAlign: 'center', paddingHorizontal: t.space.xxl },
+}));
 
 export default SafetyNumber;

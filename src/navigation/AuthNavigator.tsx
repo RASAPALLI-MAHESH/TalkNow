@@ -1,4 +1,5 @@
 //imports
+import { useTheme } from "@/src/theme";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import changePasswordScreen from "../../app/auth/changePasswordScreen";
 import forgotPasswordScreen from "../../app/auth/forgotPasswordScreen";
@@ -19,8 +20,10 @@ type AuthStackParamList = {
 const Stack = createNativeStackNavigator<AuthStackParamList>();
 const AuthNavigator = () =>
 {
+    const { colors } = useTheme();
+    // Each screen draws its own glass bar and title (AuthScaffold), so the native header is off.
     return(
-        <Stack.Navigator screenOptions={{headerTitleAlign : "center"}}>
+        <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ground } }}>
             <Stack.Screen name="Login" component={LoginScreen} options={{title : "Login"}} />
             <Stack.Screen name="SignUp" component={SignUpScreen} options={{title : "Sign Up"}} />
             <Stack.Screen name="changePassword" component={changePasswordScreen} options={{title : "Change Password"}} />

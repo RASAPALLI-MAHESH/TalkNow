@@ -1,75 +1,84 @@
 /**
- * fullProfile.tsx — Custom Wireframe Implementation
+ * fullProfile.tsx: a person's profile, and the Settings tab for your own.
  *
- * Implements the explicit layout requested by the user:
- * - Header: Back arrow.
- * - Top Row: Avatar + @username (Left) | FULL NAME + Bio (Right)
- * - Actions: Follow Request / Portfolio / Share
- * - Hero Description Card: Large gradient/image card spanning the width.
- *   - If isSelf, tapping opens HeroCanvas for creative editing.
- * - Highlights Row: 4 specific circles (WhatsApp, Instagram, LinkedIn, Twitter).
- * - Links: AddLink component.
+ * Layout (requested by the product owner, kept as designed):
+ * - Top row: avatar + @username (left) | full name + bio (right)
+ * - Actions: relationship button + more (other people only)
+ * - Hero card: themed text or photo; your own opens the HeroCanvas editor
+ * - Social circles: WhatsApp, Instagram, LinkedIn, Twitter
+ * - Additional links (AddLink)
+ * - Settings tab only: Account (blocked accounts, policies, log out, delete account)
  */
 
 import AddLink, { type LinkEntry } from '@/app/components/AddLink';
 import DeleteAccountModal from '@/app/components/DeleteAccountModal';
 import { useSafetyActions } from '@/app/components/SafetyActions';
-import { PRIVACY_POLICY_URL, TERMS_URL } from '@/services/config';
-import RippleButton from '@/app/components/RippleButton';
+import {
+    BottomSheet,
+    Button,
+    EmptyState,
+    IconButton,
+    ListRow,
+    ListSection,
+    NavBar,
+    PressableScale,
+    TextField,
+    useNavBarHeight,
+    useScrollEdge,
+    useTabBarClearance,
+} from '@/app/components/ui';
 import useAuth from '@/hooks/useAuth';
 import { getAuthErrorMessage, getUserProfile, updateProfile } from '@/services/AuthService';
+import { PRIVACY_POLICY_URL, TERMS_URL } from '@/services/config';
 import {
+    isPrimaryRelationshipAction,
     performRelationshipAction,
     relationshipLabel,
     toRelationship,
     type Relationship,
 } from '@/services/relationships';
+import { makeStyles, useTheme } from '@/src/theme';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
-    Animated,
-    Dimensions,
-    KeyboardAvoidingView,
     Linking,
     Modal,
-    Platform,
-    ScrollView,
-    StatusBar,
+    Pressable,
     StyleSheet,
     Text,
     TextInput,
-    UIManager,
     View,
+    useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { HeroData } from './HeroCanvas'; // We'll import the type
+import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { heroThemeFor, type HeroData } from './HeroCanvas';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-    UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
-/* ─── Design tokens ─── */
-const NAVY          = '#1a4358'; // from the user's mockup button color
-const NAVY_PRESSED  = '#123040';
-const GREEN_GRAD    = '#9dbb71'; // from mockup hero card
-const WHITE         = '#ffffff';
-const INK           = '#111111';
-const INK_MUTED     = '#666666';
-const CIRCLE_BG     = '#d9d9d9'; // placeholder gray
-const SEPARATOR     = 'rgba(0,0,0,0.08)';
-
-const { width: W, height: H } = Dimensions.get('window');
-
-/* ─── Social Links Logic ─── */
+/* ─── Social Links ─── */
 type SocialPlatform = 'whatsapp' | 'instagram' | 'linkedin' | 'twitter';
 const SOCIAL_ICONS: Record<SocialPlatform, keyof typeof Ionicons.glyphMap> = {
     whatsapp: 'logo-whatsapp',
     instagram: 'logo-instagram',
     linkedin: 'logo-linkedin',
     twitter: 'logo-twitter',
+};
+const SOCIAL_NAMES: Record<SocialPlatform, string> = {
+    whatsapp: 'WhatsApp',
+    instagram: 'Instagram',
+    linkedin: 'LinkedIn',
+    twitter: 'Twitter',
+};
+
+// Saved social links must open as web links; a bare "instagram.com/me" gets https://.
+const normalizeSocialUrl = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 };
 
 const SocialCircle = ({
@@ -83,23 +92,88 @@ const SocialCircle = ({
     isSelf: boolean;
     onPress: () => void;
 }) => {
-    // If not self and no url exists, hide it.
+    const s = useStyles();
+    const { colors } = useTheme();
+    // Other people's empty links are hidden.
     if (!isSelf && !url) return null;
-
     const hasUrl = !!url;
+    const name = SOCIAL_NAMES[platform];
 
     return (
-        <RippleButton
+        <PressableScale
             onPress={onPress}
-            style={[S.socialCircle, hasUrl ? S.socialCircleActive : S.socialCircleEmpty]}
-            rippleColor="rgba(0,0,0,0.1)"
+            scaleTo={0.92}
+            style={[s.socialCircle, hasUrl ? s.socialCircleActive : s.socialCircleEmpty]}
+            accessibilityRole={hasUrl && !isSelf ? 'link' : 'button'}
+            accessibilityLabel={isSelf ? (hasUrl ? `Edit ${name} link` : `Add ${name} link`) : `Open ${name}`}
         >
-            {hasUrl ? (
-                <Ionicons name={SOCIAL_ICONS[platform]} size={28} color={WHITE} />
+            <Ionicons name={SOCIAL_ICONS[platform]} size={26} color={hasUrl ? colors.onTint : colors.tertiaryLabel} />
+        </PressableScale>
+    );
+};
+
+/* ─── Hero card ─── */
+export const HeroCard = ({
+    heroData,
+    isSelf,
+    onEdit,
+}: {
+    heroData: HeroData | null;
+    isSelf: boolean;
+    onEdit: () => void;
+}) => {
+    const s = useStyles();
+    const { colors } = useTheme();
+    const [expanded, setExpanded] = useState(false);
+    const empty = !heroData || (!heroData.text && !heroData.customImageUri);
+    if (empty && !isSelf) return null;
+
+    if (empty) {
+        return (
+            <PressableScale onPress={onEdit} style={s.heroEmpty} accessibilityRole="button" accessibilityLabel="Design your Hero Card">
+                <Ionicons name="color-wand-outline" size={26} color={colors.tintText} />
+                <Text style={s.heroEmptyText}>Tap to design your Hero Card</Text>
+            </PressableScale>
+        );
+    }
+
+    const theme = heroThemeFor(heroData!.themeId);
+    const textColor = heroData!.customImageUri ? '#ffffff' : theme.textColor;
+    const long = heroData!.text.length > 200;
+
+    return (
+        <Pressable
+            onPress={isSelf ? onEdit : undefined}
+            disabled={!isSelf}
+            style={[s.heroCard, expanded && s.heroCardExpanded]}
+            accessibilityRole={isSelf ? 'button' : 'text'}
+            accessibilityLabel={isSelf ? `Hero card: ${heroData!.text}. Double tap to edit` : heroData!.text}
+        >
+            {heroData!.customImageUri ? (
+                <>
+                    <ExpoImage source={{ uri: heroData!.customImageUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+                    <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.42)' }]} />
+                </>
             ) : (
-                <Ionicons name={SOCIAL_ICONS[platform]} size={28} color="#999" />
+                <LinearGradient colors={theme.colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFillObject} />
             )}
-        </RippleButton>
+
+            <Text style={[s.heroText, { color: textColor }]} numberOfLines={expanded ? undefined : 6} ellipsizeMode="tail">
+                {heroData!.text}
+            </Text>
+
+            {long && (
+                <PressableScale onPress={() => setExpanded((v) => !v)} style={s.heroMore} accessibilityRole="button">
+                    <Text style={s.heroMoreText}>{expanded ? 'Show Less' : 'View Full Here'}</Text>
+                </PressableScale>
+            )}
+
+            {isSelf && (
+                <View style={s.heroEditBadge} accessibilityElementsHidden>
+                    <Ionicons name="pencil" size={14} color="#ffffff" />
+                </View>
+            )}
+        </Pressable>
     );
 };
 
@@ -110,8 +184,16 @@ type FullProfileProps = {
     isSettingsTab?: boolean;
 };
 
+const LARGE_TITLE_HEIGHT = 52;
+
 const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => {
+    const s = useStyles();
+    const { colors } = useTheme();
     const insets = useSafeAreaInsets();
+    const navHeight = useNavBarHeight();
+    const tabClearance = useTabBarClearance();
+    const { width } = useWindowDimensions();
+    const { scrollY, onScroll } = useScrollEdge();
     const { user: me, Logout, updateUser, signOutLocally } = useAuth();
 
     // If it's the settings tab, we are viewing our OWN profile.
@@ -126,6 +208,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     const [followLoading, setFollowLoading] = useState(false);
     // The server answers 404 for deleted accounts and for people who blocked you.
     const [unavailable, setUnavailable] = useState(false);
+    const [loaded, setLoaded] = useState(false);
     const [deleteVisible, setDeleteVisible] = useState(false);
 
     const { openSafetyMenu, safetySheet } = useSafetyActions({
@@ -153,17 +236,14 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     const savedNameRef = useRef('');
     const savedBioRef = useRef('');
 
-    // Modals & animations
+    // Modals
     const [imgViewerVisible, setImgViewerVisible] = useState(false);
     const [socialDialogVisible, setSocialDialogVisible] = useState(false);
     const [activeSocialPlatform, setActiveSocialPlatform] = useState<SocialPlatform | null>(null);
     const [socialInputUrl, setSocialInputUrl] = useState('');
 
-    const avatarScale = useRef(new Animated.Value(1)).current;
-
     // Hero Data — null means user hasn't configured it yet
     const [heroData, setHeroData] = useState<HeroData | null>(null);
-    const [heroExpanded, setHeroExpanded] = useState(false);
 
     /* Fetch Profile Data on Mount */
     useEffect(() => {
@@ -181,7 +261,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         }).catch((err) => {
             if (err?.response?.status === 404) setUnavailable(true);
             else console.error(err);
-        });
+        }).finally(() => setLoaded(true));
     }, [peerId]);
 
     /* HeroCanvas saves own edits and updates the signed-in user; show them here. */
@@ -189,24 +269,6 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
     useEffect(() => {
         if (isSelf && myHeroData) setHeroData(myHeroData);
     }, [isSelf, myHeroData]);
-
-    /* Animation */
-    const screenScale   = useRef(new Animated.Value(0.94)).current;
-    const screenOpacity = useRef(new Animated.Value(0)).current;
-
-    useEffect(() => {
-        Animated.parallel([
-            Animated.spring(screenScale, { toValue: 1, useNativeDriver: true, tension: 80, friction: 9 }),
-            Animated.timing(screenOpacity, { toValue: 1, duration: 260, useNativeDriver: true }),
-        ]).start();
-    }, []);
-
-    const handleBack = useCallback(() => {
-        Animated.parallel([
-            Animated.spring(screenScale, { toValue: 0.94, useNativeDriver: true, speed: 60 }),
-            Animated.timing(screenOpacity, { toValue: 0, duration: 160, useNativeDriver: true }),
-        ]).start(() => navigation.goBack());
-    }, [navigation]);
 
     const handleToggleFollow = async () => {
         if (!peerId || followLoading) return;
@@ -227,7 +289,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
             const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
             if (status !== 'granted') return;
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                mediaTypes: ['images'],
                 allowsEditing: true,
                 aspect: [1, 1],
                 quality: 0.6,
@@ -263,13 +325,6 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         }
     };
 
-    const handleAvatarPress = () => {
-        Animated.sequence([
-            Animated.spring(avatarScale, { toValue: 0.88, useNativeDriver: true, speed: 80 }),
-            Animated.spring(avatarScale, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 10 }),
-        ]).start(() => setImgViewerVisible(true));
-    };
-
     const handleSocialPress = (platform: SocialPlatform) => {
         const url = socialUrls[platform];
         if (url && !isSelf) {
@@ -284,7 +339,7 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
 
     const handleSaveSocial = () => {
         if (activeSocialPlatform) {
-            const newUrls = { ...socialUrls, [activeSocialPlatform]: socialInputUrl };
+            const newUrls = { ...socialUrls, [activeSocialPlatform]: normalizeSocialUrl(socialInputUrl) };
             setSocialUrls(newUrls);
             updateProfile({ socialUrls: newUrls }).catch(console.error);
         }
@@ -306,240 +361,200 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
         updateUser({ bio });
     };
 
+    const confirmLogout = () => {
+        Alert.alert('Log out?', 'You can log back in with your username and password.', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Log Out', style: 'destructive', onPress: () => void Logout() },
+        ]);
+    };
 
     if (unavailable) {
         return (
-            <SafeAreaView style={S.safe} edges={['top', 'left', 'right']}>
-                <View style={S.header}>
-                    <RippleButton onPress={() => navigation.goBack()} borderless style={S.backBtn} rippleColor="rgba(0,0,0,0.2)">
-                        <Ionicons name="arrow-back" size={26} color={INK} />
-                    </RippleButton>
+            <View style={s.screen}>
+                <View style={[s.unavailable, { paddingTop: navHeight }]}>
+                    <EmptyState icon="person-remove-outline" title="This account isn't available." />
                 </View>
-                <View style={S.unavailableWrap}>
-                    <Text style={S.unavailableText}>This account isn&apos;t available.</Text>
-                </View>
-            </SafeAreaView>
+                <NavBar onBack={() => navigation.goBack()} />
+            </View>
         );
     }
 
+    const relationshipKey: Relationship | 'self' = isSelf ? 'self' : relationship;
+    const primaryAction = !isSelf && isPrimaryRelationshipAction(relationship);
+    const socialPlatforms = (['whatsapp', 'instagram', 'linkedin', 'twitter'] as SocialPlatform[]).filter(
+        (p) => isSelf || !!socialUrls[p]
+    );
+
     return (
-        <SafeAreaView style={S.safe} edges={isSettingsTab ? ['top', 'left', 'right'] : ['top', 'left', 'right']}>
-            <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-            <Animated.View style={[S.root, { opacity: screenOpacity, transform: [{ scale: screenScale }] }]}>
-                
-                {/* ── Header ── */}
-                <View style={[S.header, isSettingsTab && { justifyContent: 'space-between', flexDirection: 'row', alignItems: 'center', paddingRight: 20 }]}>
-                    {!isSettingsTab ? (
-                        <RippleButton onPress={handleBack} borderless style={S.backBtn} rippleColor="rgba(0,0,0,0.2)">
-                            <Ionicons name="arrow-back" size={26} color={INK} />
-                        </RippleButton>
-                    ) : (
-                        <Text style={S.settingsTitle}>My Profile</Text>
-                    )}
+        <View style={s.screen}>
+            <Animated.ScrollView
+                onScroll={onScroll}
+                scrollEventThrottle={16}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={[
+                    s.content,
+                    {
+                        paddingTop: navHeight + (isSettingsTab ? -8 : 8),
+                        paddingBottom: isSettingsTab ? tabClearance : Math.max(insets.bottom, 16) + 32,
+                    },
+                ]}
+            >
+                {isSettingsTab && (
+                    <View style={s.largeTitleRow}>
+                        <Text style={s.largeTitle} accessibilityRole="header">
+                            My Profile
+                        </Text>
+                    </View>
+                )}
 
-                    {isSettingsTab && (
-                        <RippleButton onPress={Logout} borderless style={S.logoutBtn} rippleColor="rgba(239,68,68,0.15)">
-                            <Ionicons name="log-out-outline" size={24} color="#ef4444" />
-                        </RippleButton>
-                    )}
-                </View>
-
-                <ScrollView
-                    style={S.scroll}
-                    contentContainerStyle={[S.scrollContent, { paddingBottom: Math.max(insets.bottom + 32, 48) }]}
-                    showsVerticalScrollIndicator={false}
-                >
-                    {/* ── Top Profile Row ── */}
-                    <View style={S.topRow}>
-                        <View style={S.avatarCol}>
-                            <RippleButton onPress={handleAvatarPress} borderless style={S.avatarBtn} rippleColor="rgba(0,0,0,0.2)">
-                                <Animated.View style={{ transform: [{ scale: avatarScale }] }}>
-                                    {localPeerAvatar ? (
-                                        <ExpoImage source={{ uri: localPeerAvatar }} style={S.avatar} contentFit="cover" />
-                                    ) : (
-                                        <View style={S.avatarFallback}></View>
-                                    )}
-                                    {isSelf && (
-                                        <RippleButton onPress={handlePickAvatar} style={S.avatarEditBadge} borderless>
-                                            <Ionicons name="camera" size={16} color={WHITE} />
-                                        </RippleButton>
-                                    )}
-                                </Animated.View>
-                            </RippleButton>
-                            <Text style={S.handle} numberOfLines={1}>{peerUsername.toLowerCase()}</Text>
-                        </View>
-                        
-                        <View style={S.infoCol}>
-                            {isSelf ? (
-                                <>
-                                    <TextInput
-                                        style={S.fullNameInput}
-                                        value={editName}
-                                        onChangeText={setEditName}
-                                        onBlur={handleBlurName}
-                                        placeholder="FULL NAME"
-                                        placeholderTextColor={INK_MUTED}
-                                    />
-                                    <TextInput
-                                        style={S.bioInput}
-                                        value={editBio}
-                                        onChangeText={setEditBio}
-                                        onBlur={handleBlurBio}
-                                        placeholder="Bio of the user"
-                                        placeholderTextColor={INK_MUTED}
-                                        multiline
-                                    />
-                                </>
+                {/* ── Top row: avatar + handle | name + bio ── */}
+                <View style={s.topRow}>
+                    <View style={s.avatarCol}>
+                        <Pressable
+                            onPress={() => setImgViewerVisible(true)}
+                            style={s.avatarBtn}
+                            accessibilityRole="imagebutton"
+                            accessibilityLabel={`View ${peerUsername}'s photo`}
+                        >
+                            {localPeerAvatar ? (
+                                <ExpoImage source={{ uri: localPeerAvatar }} style={s.avatar} contentFit="cover" />
                             ) : (
-                                <>
-                                    <Text style={S.fullName} numberOfLines={2}>{editName || peerUsername.toUpperCase()}</Text>
-                                    {!!editBio && <Text style={S.bio} numberOfLines={3}>{editBio}</Text>}
-                                </>
+                                <View style={[s.avatar, s.avatarFallback]}>
+                                    <Text style={s.avatarInitial}>{peerUsername.slice(0, 1).toUpperCase()}</Text>
+                                </View>
                             )}
-                        </View>
+                        </Pressable>
+                        {isSelf && (
+                            <PressableScale
+                                onPress={handlePickAvatar}
+                                style={s.avatarEditBadge}
+                                accessibilityRole="button"
+                                accessibilityLabel="Change profile photo"
+                                hitSlop={8}
+                            >
+                                {isPickingAvatar ? (
+                                    <ActivityIndicator size="small" color={colors.onTint} />
+                                ) : (
+                                    <Ionicons name="camera" size={15} color={colors.onTint} />
+                                )}
+                            </PressableScale>
+                        )}
+                        <Text style={s.handle} numberOfLines={1}>@{peerUsername.toLowerCase()}</Text>
                     </View>
 
-                    {/* ── Action Buttons ── */}
-                    {/* Hide the action buttons completely in Settings/Editor mode since you can't Follow or message yourself */}
-                    {!isSettingsTab && (
-                        <View style={S.actionsRow}>
-                            <RippleButton
-                                onPress={handleToggleFollow}
-                                style={[S.actionBtn, isSelf && S.actionBtnDisabled]}
-                                disabled={isSelf || followLoading}
-                                rippleColor="rgba(255,255,255,0.2)"
-                            >
-                                <Text style={S.actionBtnText}>{relationshipLabel[isSelf ? 'self' : relationship]}</Text>
-                            </RippleButton>
+                    <View style={s.infoCol}>
+                        {isSelf ? (
+                            <>
+                                <TextInput
+                                    style={[s.fullName, s.inlineInput]}
+                                    value={editName}
+                                    onChangeText={setEditName}
+                                    onBlur={handleBlurName}
+                                    placeholder="FULL NAME"
+                                    placeholderTextColor={colors.placeholder}
+                                    selectionColor={colors.tintText}
+                                    accessibilityLabel="Full name"
+                                />
+                                <TextInput
+                                    style={[s.bio, s.inlineInput]}
+                                    value={editBio}
+                                    onChangeText={setEditBio}
+                                    onBlur={handleBlurBio}
+                                    placeholder="Bio of the user"
+                                    placeholderTextColor={colors.placeholder}
+                                    selectionColor={colors.tintText}
+                                    multiline
+                                    accessibilityLabel="Bio"
+                                />
+                            </>
+                        ) : (
+                            <>
+                                <Text style={s.fullName} numberOfLines={2}>{editName || peerUsername.toUpperCase()}</Text>
+                                {!!editBio && <Text style={s.bio} numberOfLines={4}>{editBio}</Text>}
+                            </>
+                        )}
+                    </View>
+                </View>
 
-                            {!isSelf && (
-                                <RippleButton
-                                    onPress={openSafetyMenu}
-                                    style={S.moreBtn}
-                                    rippleColor="rgba(255,255,255,0.2)"
-                                    accessibilityLabel="More options"
-                                >
-                                    <Ionicons name="ellipsis-horizontal" size={20} color={WHITE} />
-                                </RippleButton>
-                            )}
-                        </View>
-                    )}
+                {/* ── Actions (other people) ── */}
+                {!isSettingsTab && (
+                    <View style={s.actionsRow}>
+                        <Button
+                            title={relationshipLabel[relationshipKey]}
+                            onPress={handleToggleFollow}
+                            disabled={isSelf}
+                            loading={followLoading}
+                            variant={primaryAction ? 'filled' : 'tinted'}
+                            size="md"
+                            style={s.actionBtn}
+                        />
+                        {!isSelf && (
+                            <IconButton
+                                name="ellipsis-horizontal"
+                                variant="tinted"
+                                onPress={openSafetyMenu}
+                                accessibilityLabel="More options"
+                            />
+                        )}
+                    </View>
+                )}
 
-                    {/* ── Hero Description Card ── */}
-                    {(!heroData || (!heroData.text && !heroData.customImageUri)) && !isSelf ? null : (
-                        <RippleButton
-                            onPress={handleHeroPress}
-                            disabled={!isSelf}
-                            style={[
-                                S.heroCard,
-                                (!heroData || (!heroData.text && !heroData.customImageUri))
-                                    ? S.heroCardEmpty
-                                    : { backgroundColor: heroData.themeId === 't4' ? GREEN_GRAD : '#6733d0' },
-                                (heroData && heroExpanded) && S.heroCardExpanded
-                            ]}
-                            rippleColor="rgba(255,255,255,0.3)"
-                        >
-                            {(heroData && heroData.customImageUri) && (
-                                <>
-                                    <ExpoImage source={{ uri: heroData.customImageUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
-                                    <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.45)' }]} />
-                                </>
-                            )}
+                {/* ── Hero Description Card ── */}
+                <HeroCard heroData={heroData} isSelf={!!isSelf} onEdit={handleHeroPress} />
 
-                            {(!heroData || (!heroData.text && !heroData.customImageUri)) ? (
-                                <Text style={S.heroTextEmpty}>Tap to design your Hero Card</Text>
-                            ) : (
-                                <View style={S.heroTextContainer}>
-                                    <Text
-                                        style={[S.heroText, heroData.customImageUri ? { color: '#fff' } : null]}
-                                        numberOfLines={heroExpanded ? undefined : 6}
-                                        ellipsizeMode="tail"
-                                    >
-                                        {heroData.text}
-                                    </Text>
-                                    
-                                    {!heroExpanded && heroData.text.length > 200 && (
-                                        <RippleButton onPress={() => setHeroExpanded(true)} style={S.viewFullBtn}>
-                                            <Text style={S.viewFullText}>View Full Here</Text>
-                                        </RippleButton>
-                                    )}
-                                    {heroExpanded && (
-                                        <RippleButton onPress={() => setHeroExpanded(false)} style={S.viewFullBtn}>
-                                            <Text style={S.viewFullText}>Show Less</Text>
-                                        </RippleButton>
-                                    )}
-                                </View>
-                            )}
-
-                            {isSelf && (
-                                <View style={S.editBadge}>
-                                    <Ionicons name={heroData ? "pencil" : "add"} size={14} color="#000" />
-                                </View>
-                            )}
-                        </RippleButton>
-                    )}
-
-                    {/* ── Circular Social Links ── */}
-                    <View style={S.socialRow}>
-                        {(['whatsapp', 'instagram', 'linkedin', 'twitter'] as SocialPlatform[]).map(plat => (
+                {/* ── Social links ── */}
+                {socialPlatforms.length > 0 && (
+                    <View style={s.socialRow}>
+                        {socialPlatforms.map(plat => (
                             <SocialCircle
                                 key={plat}
                                 platform={plat}
                                 url={socialUrls[plat]}
-                                isSelf={isSelf}
+                                isSelf={!!isSelf}
                                 onPress={() => handleSocialPress(plat)}
                             />
                         ))}
                     </View>
+                )}
 
-                    {/* ── Custom Links Component ── */}
-                    {(!isSelf && links.length === 0) ? null : (
-                        <View style={S.linksSection}>
-                            <AddLink
-                                initialLinks={links}
-                                onChange={(newLinks) => {
-                                    setLinks(newLinks);
-                                    updateProfile({ customLinks: newLinks }).catch(console.error);
-                                }}
-                                maxLinks={8}
-                                sectionTitle="Additional Links"
-                                readonly={!isSelf}
-                            />
-                        </View>
-                    )}
+                {/* ── Custom Links ── (rendered once the profile has loaded, so saved links are never overwritten) */}
+                {loaded && (isSelf || links.length > 0) && (
+                    <AddLink
+                        initialLinks={links}
+                        onChange={(newLinks) => {
+                            setLinks(newLinks);
+                            updateProfile({ customLinks: newLinks }).catch(console.error);
+                        }}
+                        maxLinks={8}
+                        sectionTitle="Additional Links"
+                        readonly={!isSelf}
+                    />
+                )}
 
-                    {/* ── Account (own profile in Settings) ── */}
-                    {isSettingsTab && (
-                        <View style={S.accountSection}>
-                            <Text style={S.accountTitle}>Account</Text>
-                            <RippleButton onPress={() => navigation.navigate('BlockedUsers')} style={S.accountRow}>
-                                <Ionicons name="hand-left-outline" size={20} color={INK} />
-                                <Text style={S.accountRowText}>Blocked accounts</Text>
-                                <Ionicons name="chevron-forward" size={16} color={INK_MUTED} />
-                            </RippleButton>
-                            {!!PRIVACY_POLICY_URL && (
-                                <RippleButton onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})} style={S.accountRow}>
-                                    <Ionicons name="shield-checkmark-outline" size={20} color={INK} />
-                                    <Text style={S.accountRowText}>Privacy policy</Text>
-                                    <Ionicons name="open-outline" size={16} color={INK_MUTED} />
-                                </RippleButton>
-                            )}
-                            {!!TERMS_URL && (
-                                <RippleButton onPress={() => Linking.openURL(TERMS_URL).catch(() => {})} style={S.accountRow}>
-                                    <Ionicons name="document-text-outline" size={20} color={INK} />
-                                    <Text style={S.accountRowText}>Terms of use</Text>
-                                    <Ionicons name="open-outline" size={16} color={INK_MUTED} />
-                                </RippleButton>
-                            )}
-                            <RippleButton onPress={() => setDeleteVisible(true)} style={S.accountRow} rippleColor="rgba(239,68,68,0.14)">
-                                <Ionicons name="trash-outline" size={20} color="#ef4444" />
-                                <Text style={[S.accountRowText, { color: '#ef4444' }]}>Delete account</Text>
-                            </RippleButton>
-                        </View>
-                    )}
+                {/* ── Account (own profile in Settings) ── */}
+                {isSettingsTab && (
+                    <ListSection title="Account">
+                        <ListRow icon="hand-left-outline" title="Blocked accounts" onPress={() => navigation.navigate('BlockedUsers')} />
+                        {!!PRIVACY_POLICY_URL && (
+                            <ListRow icon="shield-checkmark-outline" title="Privacy policy" accessory="external" onPress={() => Linking.openURL(PRIVACY_POLICY_URL).catch(() => {})} />
+                        )}
+                        {!!TERMS_URL && (
+                            <ListRow icon="document-text-outline" title="Terms of use" accessory="external" onPress={() => Linking.openURL(TERMS_URL).catch(() => {})} />
+                        )}
+                        <ListRow icon="log-out-outline" title="Log out" accessory="none" onPress={confirmLogout} testID="settings-logout" />
+                        <ListRow icon="trash-outline" title="Delete account" destructive accessory="none" onPress={() => setDeleteVisible(true)} />
+                    </ListSection>
+                )}
+            </Animated.ScrollView>
 
-                </ScrollView>
-            </Animated.View>
+            <NavBar
+                title={isSettingsTab ? 'My Profile' : peerUsername}
+                onBack={isSettingsTab ? undefined : () => navigation.goBack()}
+                scrollY={scrollY}
+                titleRevealAt={isSettingsTab ? LARGE_TITLE_HEIGHT - 4 : 120}
+            />
 
             {safetySheet}
             <DeleteAccountModal
@@ -552,307 +567,231 @@ const FullProfile = ({ navigation, route, isSettingsTab }: FullProfileProps) => 
             />
 
             {/* ── Fullscreen Avatar Viewer ── */}
-            <Modal visible={imgViewerVisible} transparent animationType="fade" onRequestClose={() => setImgViewerVisible(false)}>
-                <View style={S.imgViewerBackdrop}>
-                    <RippleButton onPress={() => setImgViewerVisible(false)} style={S.imgViewerCloseBtn} borderless>
-                        <Ionicons name="close" size={32} color={WHITE} />
-                    </RippleButton>
+            <Modal visible={imgViewerVisible} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setImgViewerVisible(false)}>
+                <View style={s.imgViewerBackdrop}>
                     {localPeerAvatar ? (
-                        <ExpoImage source={{ uri: localPeerAvatar }} style={S.imgViewerImage} contentFit="contain" />
+                        <ExpoImage source={{ uri: localPeerAvatar }} style={{ width, height: width }} contentFit="contain" />
                     ) : (
-                        <View style={S.imgViewerPlaceholder}>
-                            <Text style={S.imgViewerPlaceholderText}>{peerUsername.slice(0, 1).toUpperCase()}</Text>
+                        <View style={[s.imgViewerPlaceholder, { width, height: width }]}>
+                            <Text style={s.imgViewerPlaceholderText}>{peerUsername.slice(0, 1).toUpperCase()}</Text>
                         </View>
                     )}
+                    <IconButton
+                        name="close"
+                        variant="glass"
+                        color="#ffffff"
+                        onPress={() => setImgViewerVisible(false)}
+                        accessibilityLabel="Close photo"
+                        style={[s.imgViewerClose, { top: insets.top + 8 }]}
+                    />
                 </View>
             </Modal>
 
-            {/* ── Social Link Edit Dialog ── */}
-            <Modal visible={socialDialogVisible} transparent animationType="fade" onRequestClose={() => setSocialDialogVisible(false)}>
-                <KeyboardAvoidingView style={S.dialogBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                    <View style={S.dialogCard}>
-                        <Text style={S.dialogTitle}>Set {activeSocialPlatform} Link</Text>
-                        <TextInput
-                            style={S.dialogInput}
-                            value={socialInputUrl}
-                            onChangeText={setSocialInputUrl}
-                            placeholder={`https://${activeSocialPlatform}.com/...`}
-                            autoCapitalize="none"
-                            keyboardType="url"
-                            autoCorrect={false}
-                        />
-                        <View style={S.dialogActions}>
-                            <RippleButton onPress={() => setSocialDialogVisible(false)} style={S.dialogBtn}>
-                                <Text style={S.dialogBtnCancelText}>Cancel</Text>
-                            </RippleButton>
-                            <RippleButton onPress={handleSaveSocial} style={S.dialogBtnActive}>
-                                <Text style={S.dialogBtnSaveText}>Save</Text>
-                            </RippleButton>
-                        </View>
+            {/* ── Social Link Edit Sheet ── */}
+            <BottomSheet
+                visible={socialDialogVisible}
+                onClose={() => setSocialDialogVisible(false)}
+                title={activeSocialPlatform ? `${SOCIAL_NAMES[activeSocialPlatform]} link` : 'Link'}
+                subtitle="Leave empty to remove it from your profile."
+            >
+                <View style={s.sheetBody}>
+                    <TextField
+                        icon={activeSocialPlatform ? SOCIAL_ICONS[activeSocialPlatform] : 'link-outline'}
+                        value={socialInputUrl}
+                        onChangeText={setSocialInputUrl}
+                        placeholder={`https://${activeSocialPlatform ?? 'example'}.com/...`}
+                        autoCapitalize="none"
+                        keyboardType="url"
+                        textContentType="URL"
+                        autoCorrect={false}
+                        returnKeyType="done"
+                        onSubmitEditing={handleSaveSocial}
+                        accessibilityLabel="Link address"
+                    />
+                    <View style={s.sheetButtons}>
+                        <Button title="Cancel" variant="gray" onPress={() => setSocialDialogVisible(false)} style={s.flex1} />
+                        <Button title="Save" onPress={handleSaveSocial} style={s.flex2} />
                     </View>
-                </KeyboardAvoidingView>
-            </Modal>
-
-        </SafeAreaView>
+                </View>
+            </BottomSheet>
+        </View>
     );
 };
 
 /* ─── Styles ─── */
-const S = StyleSheet.create({
-    safe: {
+const useStyles = makeStyles((t) => ({
+    screen: {
         flex: 1,
-        backgroundColor: WHITE,
+        backgroundColor: t.colors.ground,
     },
-    root: {
+    content: {
+        gap: t.space.xxl,
+    },
+    largeTitleRow: {
+        height: LARGE_TITLE_HEIGHT,
+        justifyContent: 'center',
+        paddingHorizontal: t.space.gutter,
+        marginBottom: -t.space.sm,
+    },
+    largeTitle: {
+        ...t.type.largeTitle,
+        color: t.colors.label,
+    },
+    unavailable: {
         flex: 1,
-        backgroundColor: WHITE,
-    },
-    header: {
-        height: 56,
         justifyContent: 'center',
-        paddingHorizontal: 12,
     },
-    backBtn: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    settingsTitle: {
-        fontSize: 22,
-        fontWeight: '700',
-        color: INK,
-        marginLeft: 8,
-    },
-    logoutBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#fff5f5'
-    },
-    scroll: { flex: 1 },
-    scrollContent: { paddingHorizontal: 20, paddingTop: 12, gap: 24 },
 
     /* Top Row */
     topRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 24,
+        gap: t.space.xl,
+        paddingHorizontal: t.space.gutter,
     },
     avatarCol: {
         alignItems: 'center',
-        gap: 8, // tightly aligned Handle underneath
-        width: 120, // fixed width block for perfect alignment of the right col
+        gap: t.space.sm,
+        width: 112,
     },
     avatarBtn: {
-        borderRadius: 60,
+        borderRadius: 52,
     },
     avatar: {
-        width: 110,
-        height: 110,
-        borderRadius: 55,
-        backgroundColor: '#7bc5b4', // Matches mockup avatar color
+        width: 104,
+        height: 104,
+        borderRadius: 52,
+        backgroundColor: t.colors.avatarFill,
     },
     avatarFallback: {
-        width: 110,
-        height: 110,
-        borderRadius: 55,
-        backgroundColor: '#7bc5b4',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    avatarInitial: {
+        fontSize: 40,
+        fontWeight: '700',
+        color: t.colors.avatarInitial,
     },
     avatarEditBadge: {
         position: 'absolute',
-        bottom: 0,
-        right: 0,
-        backgroundColor: NAVY,
+        top: 74,
+        right: 4,
+        backgroundColor: t.colors.tint,
         width: 32,
         height: 32,
         borderRadius: 16,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 2,
-        borderColor: '#fff',
+        borderWidth: 3,
+        borderColor: t.colors.ground,
     },
     handle: {
-        fontSize: 14,
-        color: INK,
-        fontWeight: '500',
+        ...t.type.footnote,
+        fontWeight: '600',
+        color: t.colors.secondaryLabel,
+        maxWidth: 112,
     },
     infoCol: {
         flex: 1,
         justifyContent: 'center',
-        gap: 6, // tightly aligned Name and Bio
+        gap: t.space.sm,
     },
     fullName: {
-        fontSize: 24,
-        fontWeight: '400',
-        color: INK,
-        letterSpacing: 0.5,
-    },
-    fullNameInput: {
-        fontSize: 24,
-        fontWeight: '400',
-        color: INK,
-        letterSpacing: 0.5,
-        padding: 0,
-        margin: 0,
-        borderBottomWidth: 1,
-        borderBottomColor: '#ddd',
-        paddingBottom: 2,
+        ...t.type.title2,
+        color: t.colors.label,
     },
     bio: {
-        fontSize: 15,
-        color: INK,
-        lineHeight: 22,
+        ...t.type.subhead,
+        lineHeight: 21,
+        color: t.colors.secondaryLabel,
     },
-    bioInput: {
-        fontSize: 15,
-        color: INK,
-        lineHeight: 22,
+    inlineInput: {
         padding: 0,
         margin: 0,
-        borderBottomWidth: 1,
-        borderBottomColor: '#ddd',
-        paddingBottom: 2,
+        paddingBottom: t.space.xs,
+        borderBottomWidth: t.size.hairline,
+        borderBottomColor: t.colors.separator,
     },
 
-    /* Action Strip */
+    /* Actions */
     actionsRow: {
         flexDirection: 'row',
-        gap: 10,
+        alignItems: 'center',
+        gap: t.space.sm,
+        paddingHorizontal: t.space.gutter,
+        marginTop: -t.space.sm,
     },
     actionBtn: {
         flex: 1,
-        backgroundColor: NAVY,
-        paddingVertical: 10,
-        borderRadius: 8, // slight rounding like mockup
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    actionBtnDisabled: {
-        opacity: 0.6,
-    },
-    moreBtn: {
-        width: 48,
-        backgroundColor: NAVY,
-        borderRadius: 8,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    accountSection: {
-        marginTop: 28,
-        borderTopWidth: 1,
-        borderTopColor: SEPARATOR,
-        paddingTop: 16,
-    },
-    accountTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: INK_MUTED,
-        textTransform: 'uppercase',
-        letterSpacing: 0.6,
-        marginBottom: 4,
-    },
-    accountRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        paddingVertical: 14,
-    },
-    accountRowText: {
-        flex: 1,
-        fontSize: 16,
-        color: INK,
-    },
-    unavailableWrap: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 32,
-    },
-    unavailableText: {
-        fontSize: 16,
-        color: INK_MUTED,
-        textAlign: 'center',
-    },
-    actionBtnText: {
-        color: WHITE,
-        fontSize: 12,
-        fontWeight: '500',
     },
 
     /* Hero Card */
     heroCard: {
-        marginHorizontal: 16,
-        borderRadius: 20,
+        marginHorizontal: t.space.gutter,
+        borderRadius: t.radius.xxl,
         minHeight: 180,
-        maxHeight: 280, // auto crop height unless expanded
-        padding: 24,
+        maxHeight: 300,
+        padding: t.space.xxl,
         justifyContent: 'center',
         overflow: 'hidden',
-        ...Platform.select({
-            ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 10 },
-            android: { elevation: 4 },
-        }),
     },
     heroCardExpanded: {
-        maxHeight: 1000,
-    },
-    heroCardEmpty: {
-        backgroundColor: '#f5f5f5',
-        borderWidth: 2,
-        borderColor: '#d1d1d1',
-        borderStyle: 'dashed',
-        alignItems: 'center',
-    },
-    heroTextContainer: {
-        flex: 1,
-        justifyContent: 'center',
+        maxHeight: undefined,
     },
     heroText: {
-        color: WHITE,
-        fontSize: 18,
-        textAlign: 'center',
-        lineHeight: 26,
-    },
-    heroTextEmpty: {
-        color: '#999',
-        fontSize: 16,
-        fontWeight: '500',
+        ...t.type.title3,
+        fontWeight: '600',
+        lineHeight: 27,
         textAlign: 'center',
     },
-    viewFullBtn: {
-        marginTop: 12,
+    heroMore: {
+        marginTop: t.space.md,
         alignSelf: 'center',
         paddingVertical: 6,
-        paddingHorizontal: 16,
-        backgroundColor: 'rgba(0,0,0,0.25)',
-        borderRadius: 16,
+        paddingHorizontal: t.space.lg,
+        backgroundColor: 'rgba(0,0,0,0.28)',
+        borderRadius: t.radius.pill,
     },
-    viewFullText: {
-        color: WHITE,
-        fontSize: 13,
+    heroMoreText: {
+        ...t.type.footnote,
         fontWeight: '600',
+        color: '#ffffff',
     },
-    editBadge: {
+    heroEditBadge: {
         position: 'absolute',
-        top: 16,
-        right: 16,
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: 'rgba(255,255,255,0.4)',
+        top: t.space.md,
+        right: t.space.md,
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        backgroundColor: 'rgba(0,0,0,0.28)',
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    heroEmpty: {
+        marginHorizontal: t.space.gutter,
+        minHeight: 140,
+        borderRadius: t.radius.xxl,
+        borderWidth: 1.5,
+        borderStyle: 'dashed',
+        borderColor: t.colors.fillStrong,
+        backgroundColor: t.colors.surface,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: t.space.sm,
+    },
+    heroEmptyText: {
+        ...t.type.subhead,
+        fontWeight: '600',
+        color: t.colors.tintText,
     },
 
     /* Social Circles */
     socialRow: {
         flexDirection: 'row',
-        justifyContent: 'space-evenly',
-        alignItems: 'center',
+        justifyContent: 'center',
+        gap: t.space.xl,
+        paddingHorizontal: t.space.gutter,
     },
     socialCircle: {
         width: 56,
@@ -860,110 +799,49 @@ const S = StyleSheet.create({
         borderRadius: 28,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1.5,
-        borderColor: INK,
     },
     socialCircleEmpty: {
-        backgroundColor: CIRCLE_BG,
-        borderColor: '#bbb',
+        backgroundColor: t.colors.surface,
+        borderWidth: 1.5,
+        borderStyle: 'dashed',
+        borderColor: t.colors.fillStrong,
     },
     socialCircleActive: {
-        backgroundColor: NAVY,
-        borderColor: NAVY,
-    },
-
-    /* Links Section */
-    linksSection: {
-        marginTop: 8,
-        backgroundColor: '#f5f5f5',
-        padding: 16,
-        borderRadius: 12,
+        backgroundColor: t.colors.tint,
     },
 
     /* Image Viewer */
     imgViewerBackdrop: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.9)',
+        backgroundColor: 'rgba(0,0,0,0.92)',
         justifyContent: 'center',
         alignItems: 'center',
     },
-    imgViewerCloseBtn: {
+    imgViewerClose: {
         position: 'absolute',
-        top: 60,
-        right: 20,
-        width: 44,
-        height: 44,
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 10,
-    },
-    imgViewerImage: {
-        width: W,
-        height: W,
+        right: t.space.lg,
     },
     imgViewerPlaceholder: {
-        width: W,
-        height: W,
-        backgroundColor: '#7bc5b4',
+        backgroundColor: t.colors.avatarFill,
         alignItems: 'center',
         justifyContent: 'center',
     },
     imgViewerPlaceholderText: {
         fontSize: 120,
-        color: WHITE,
+        color: t.colors.avatarInitial,
         fontWeight: '800',
     },
 
-    /* Dialog */
-    dialogBackdrop: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
+    /* Sheet */
+    sheetBody: {
+        gap: t.space.lg,
     },
-    dialogCard: {
-        width: W * 0.85,
-        backgroundColor: WHITE,
-        borderRadius: 20,
-        padding: 24,
-        ...Platform.select({
-            ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 },
-            android: { elevation: 8 }
-        }),
-    },
-    dialogTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: INK,
-        marginBottom: 16,
-        textTransform: 'capitalize',
-    },
-    dialogInput: {
-        backgroundColor: '#f5f5f5',
-        borderRadius: 12,
-        padding: 14,
-        fontSize: 16,
-        color: INK,
-        marginBottom: 20,
-    },
-    dialogActions: {
+    sheetButtons: {
         flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 12,
+        gap: t.space.md,
     },
-    dialogBtn: {
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        borderRadius: 8,
-    },
-    dialogBtnActive: {
-        paddingVertical: 10,
-        paddingHorizontal: 20,
-        borderRadius: 8,
-        backgroundColor: NAVY,
-    },
-    dialogBtnCancelText: { fontSize: 15, fontWeight: '600', color: INK_MUTED },
-    dialogBtnSaveText: { fontSize: 15, fontWeight: '600', color: WHITE },
-});
+    flex1: { flex: 1 },
+    flex2: { flex: 2 },
+}));
 
 export default FullProfile;

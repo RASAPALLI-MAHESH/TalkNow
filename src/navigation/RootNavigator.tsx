@@ -6,49 +6,29 @@ import SafetyNumber from '@/app/chatRoomScreens/SafetyNumber';
 import UpdateRequired, { useUpdateRequired } from '@/app/components/UpdateRequired';
 import Chatroom from '@/app/components/chatroom';
 import Notifications from '@/app/components/notifications';
-import { createStackNavigator } from '@react-navigation/stack';
+import { useTheme } from '@/src/theme';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import React from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import HomePage from '../../app/MainScreen/tabs';
 import useAuth from '../../hooks/useAuth';
 import { usePushNotifications } from '../../services/pushNotifications';
 import AuthNavigator from './AuthNavigator';
-const Stack = createStackNavigator();
+
+// Native stack: system push and pop, the iOS edge-swipe back gesture, and Android's Back.
+const Stack = createNativeStackNavigator();
 
 const MainNavigator = () => {
+    const { colors } = useTheme();
     return (
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Navigator screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.ground } }}>
             <Stack.Screen name="HomePage" component={HomePage} />
-            <Stack.Screen
-                name="Chatroom"
-                component={Chatroom}
-            // options={{
-            //     gestureEnabled: true,
-            //     gestureDirection: 'horizontal',
-            //     cardStyleInterpolator: CardStyleInterpolators.forHorizontalIOS,
-            //     cardStyle: { backgroundColor: '#fff' },
-            //     transitionSpec: {
-            //         open: {
-            //             animation: 'timing',
-            //             config: {
-            //                 duration: 100,
-            //                 easing: Easing.out(Easing.poly(4)),
-            //             },
-            //         },
-            //         close: {
-            //             animation: 'timing',
-            //             config: {
-            //                 duration: 100,
-            //                 easing: Easing.out(Easing.poly(4)),
-            //             },
-            //         },
-            //     },
-            // }}
-            />
+            <Stack.Screen name="Chatroom" component={Chatroom} />
             <Stack.Screen name="Notifications" component={Notifications} />
             <Stack.Screen name="ChatProfile" component={ChatProfile} />
             <Stack.Screen name="FullProfile" component={FullProfile} />
-            <Stack.Screen name="HeroCanvas" component={HeroCanvas} />
+            {/* An editor with its own Cancel and Done: presented, not pushed. */}
+            <Stack.Screen name="HeroCanvas" component={HeroCanvas} options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
             <Stack.Screen name="BlockedUsers" component={BlockedUsers} />
             <Stack.Screen name="SafetyNumber" component={SafetyNumber} />
         </Stack.Navigator>
@@ -57,6 +37,7 @@ const MainNavigator = () => {
 
 const RootNavigator = () => {
     const { user, loading } = useAuth();
+    const { colors } = useTheme();
     usePushNotifications(!!user);
     const update = useUpdateRequired();
 
@@ -65,8 +46,8 @@ const RootNavigator = () => {
 
     if (loading) {
         return (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator size="large" color="#0d4d47" />
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.ground }}>
+                <ActivityIndicator size="large" color={colors.tintText} />
             </View>
         );
     }

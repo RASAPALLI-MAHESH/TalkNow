@@ -1,6 +1,19 @@
 import AvatarPicker from '@/app/components/AvatarPicker';
 import ChatBar, { type ChatListItem, type GlobalChatListItem } from '@/app/components/chatbar';
-import RippleButton from '@/app/components/RippleButton';
+import {
+    Badge,
+    Button,
+    EmptyState,
+    IconButton,
+    NavBar,
+    Notice,
+    PressableScale,
+    SearchField,
+    SegmentedControl,
+    useNavBarHeight,
+    useScrollEdge,
+    useTabBarClearance,
+} from '@/app/components/ui';
 import useAuth from '@/hooks/useAuth';
 import {
     getAuthErrorMessage,
@@ -21,46 +34,34 @@ import { useE2EE, useE2EEEvents } from '@/services/e2ee/E2EEProvider';
 import { type LocalMessage } from '@/services/e2ee/localStore';
 import { useUnread } from '@/Context/UnreadContext';
 import { API_ORIGIN } from '@/services/config';
-import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
+import { makeStyles, useTheme } from '@/src/theme';
 import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-    ActivityIndicator,
-    Animated,
-    FlatList,
-    Keyboard,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableNativeFeedback,
-    TouchableWithoutFeedback,
-    View,
-    type GestureResponderEvent,
-    type LayoutChangeEvent
-} from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Text, TextInput, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { SvgXml } from 'react-native-svg';
-
-const MODE_TOGGLE_WIDTH = 104;
-const MODE_TOGGLE_PADDING = 2;
-const MODE_TOGGLE_PILL_WIDTH = (MODE_TOGGLE_WIDTH - MODE_TOGGLE_PADDING * 2) / 2;
 
 const NOTIFICATIONS_LAST_SEEN_KEY = 'notificationsLastSeenAt';
 
-const CHAT_HEADER_ICON_XML = `
-<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#6733d0">
+const chatGlyph = (fill: string) => `
+<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="${fill}">
     <path d="M80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"/>
 </svg>
 `;
 
+// Today: time. Yesterday: "Yesterday". This week: weekday. Older: short date.
 const formatChatTime = (raw?: string) => {
     if (!raw) return '';
     const date = new Date(raw);
     if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const t = date.getTime();
+    if (t >= startOfToday) return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    if (t >= startOfToday - dayMs) return 'Yesterday';
+    if (t >= startOfToday - 6 * dayMs) return date.toLocaleDateString(undefined, { weekday: 'short' });
+    return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 };
 
 type GlobalUserSearchResult = {
@@ -126,8 +127,6 @@ const mergeChatsById = (incoming: ChatListItem[], existing: ChatListItem[]) => {
     return merged;
 };
 
-// getDefaultApiUrl and normalizeApiOrigin are now handled in config.ts via API_ORIGIN
-
 type ChatRowAction = {
     label: string;
     onPress: () => void;
@@ -136,288 +135,60 @@ type ChatRowAction = {
     loading?: boolean;
 };
 
-const ChatRow = ({
-    item,
-    onPress,
-}: {
-    item: ChatListItem;
-    onPress: () => void;
-}) => {
-    const [layout, setLayout] = useState({ width: 0, height: 0 });
-    const [inkX, setInkX] = useState(0);
-
-    const longPressFiredRef = useRef(false);
-    const touchXRef = useRef(0);
-
-    // WhatsApp-like long-press ink: expands horizontally from touch point.
-    const inkScaleLeft = useRef(new Animated.Value(0)).current;
-    const inkScaleRight = useRef(new Animated.Value(0)).current;
-    const inkOpacity = useRef(new Animated.Value(0)).current;
-
-    const onLayout = (e: LayoutChangeEvent) => {
-        const { width, height } = e.nativeEvent.layout;
-        setLayout({ width, height });    };
-
-    const primeInk = (e: GestureResponderEvent) => {
-        if (!layout.width) return;
-        const x = Math.max(0, Math.min(layout.width, e.nativeEvent.locationX));
-        touchXRef.current = x;
-        setInkX(x);
-
-        inkOpacity.stopAnimation();
-        inkScaleLeft.stopAnimation();
-        inkScaleRight.stopAnimation();
-
-        inkOpacity.setValue(0);
-        inkScaleLeft.setValue(0);
-        inkScaleRight.setValue(0);
-    };
-
-    const startLongPressInk = () => {
-        if (!layout.width) return;
-        const x = Math.max(0, Math.min(layout.width, touchXRef.current));
-        setInkX(x);
-
-        inkOpacity.setValue(0);
-        inkScaleLeft.setValue(0);
-        inkScaleRight.setValue(0);
-
-        Animated.parallel([
-            Animated.timing(inkOpacity, {
-                toValue: 1,
-                duration: 90,
-                useNativeDriver: true,
-            }),
-            Animated.timing(inkScaleLeft, {
-                toValue: 1,
-                duration: 220,
-                useNativeDriver: true,
-            }),
-            Animated.timing(inkScaleRight, {
-                toValue: 1,
-                duration: 220,
-                useNativeDriver: true,
-            }),
-        ]).start();
-    };
-
-    // On Android we use TouchableNativeFeedback for exact-point ripple;
-    // we still keep the custom ink overlay for long-press on both platforms.
-    const rippleBackground = Platform.OS === 'android'
-        ? TouchableNativeFeedback.Ripple('rgba(103,51,208,0.18)', false)
-        : undefined;
-
-    const rowBody = (
-        <Pressable
-            onLayout={onLayout}
-            style={({ pressed }) => [styles.row, pressed && Platform.OS === 'ios' && styles.rowPressed]}
-            delayLongPress={240}
-            onPressIn={(e) => {
-                primeInk(e);
-            }}
-            onLongPress={() => {
-                longPressFiredRef.current = true;
-                startLongPressInk();
-            }}
-            onPress={() => {
-                if (longPressFiredRef.current) {
-                    longPressFiredRef.current = false;
-                    return;
-                }
-                onPress();
-            }}
-            onPressOut={() => {
-                longPressFiredRef.current = false;
-                Animated.timing(inkOpacity, {
-                    toValue: 0,
-                    duration: 140,
-                    useNativeDriver: true,
-                }).start();
-            }}
+export const ChatRow = ({ item, onPress }: { item: ChatListItem; onPress: () => void }) => {
+    const s = useStyles();
+    const unread = item.unreadCount ?? 0;
+    const time = formatChatTime(item.Date);
+    return (
+        <PressableScale
+            onPress={onPress}
+            scaleTo={1}
+            style={s.row}
+            pressedStyle={s.rowPressed}
             accessibilityRole="button"
+            accessibilityLabel={`${item.name}${unread > 0 ? `, ${unread} unread` : ''}, ${item.lastMessage}${time ? `, ${time}` : ''}`}
         >
-            <View pointerEvents="none" style={styles.rippleLayer}>
-                {/* Left side: expands from touch point to the left */}
-                <Animated.View
-                    style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: 0,
-                        width: inkX,
-                        backgroundColor: 'rgba(233,226,255,0.55)',
-                        opacity: inkOpacity,
-                        transform: [
-                            { translateX: inkX / 2 },
-                            { scaleX: inkScaleLeft },
-                            { translateX: -inkX / 2 },
-                        ],
-                    }}
-                />
-
-                {/* Right side: expands from touch point to the right */}
-                <Animated.View
-                    style={{
-                        position: 'absolute',
-                        top: 0,
-                        bottom: 0,
-                        left: inkX,
-                        right: 0,
-                        backgroundColor: 'rgba(233,226,255,0.55)',
-                        opacity: inkOpacity,
-                        transform: [
-                            { translateX: -(Math.max(0, layout.width - inkX) / 2) },
-                            { scaleX: inkScaleRight },
-                            { translateX: Math.max(0, layout.width - inkX) / 2 },
-                        ],
-                    }}
-                />
-            </View>
-
-            <AvatarPicker
-                uri={item.profilePicture}
-                name={item.name}
-                size={48}
-                style={styles.avatarImage}
-                fallbackStyle={styles.avatar}
-                textStyle={styles.avatarText}
-                previewEnabled
-            />
-
-            <View style={styles.rowContent}>
-                <View style={styles.rowTop}>
-                    <Text style={[styles.name, (item.unreadCount ?? 0) > 0 && styles.nameUnread]} numberOfLines={1}>{item.name}</Text>
-                    <Text style={[
-                        styles.time,
-                        (item.unreadCount ?? 0) > 0 && styles.timeUnread,
-                    ]} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
+            <AvatarPicker uri={item.profilePicture} name={item.name} size={52} previewEnabled={false} />
+            <View style={s.rowContent}>
+                <View style={s.rowTop}>
+                    <Text style={[s.name, unread > 0 && s.nameUnread]} numberOfLines={1}>
+                        {item.name}
+                    </Text>
+                    <Text style={[s.time, unread > 0 && s.timeUnread]} numberOfLines={1}>
+                        {time}
+                    </Text>
                 </View>
-                <View style={styles.rowBottom}>
-                    <Text style={[
-                        styles.lastMessage,
-                        (item.unreadCount ?? 0) > 0 && styles.lastMessageUnread,
-                    ]} numberOfLines={1}>{item.lastMessage}</Text>
-                    {(item.unreadCount ?? 0) > 0 && (
-                        <View style={styles.unreadBadge}>
-                            <Text style={styles.unreadBadgeText}>
-                                {(item.unreadCount ?? 0) > 99 ? '99+' : item.unreadCount}
-                            </Text>
-                        </View>
-                    )}
+                <View style={s.rowBottom}>
+                    <Text style={[s.lastMessage, unread > 0 && s.lastMessageUnread]} numberOfLines={2}>
+                        {item.lastMessage}
+                    </Text>
+                    <Badge count={unread} style={s.badge} />
                 </View>
             </View>
-        </Pressable>
+        </PressableScale>
     );
-
-    // On Android: wrap with TNF so the ripple originates exactly from the touch point
-    if (Platform.OS === 'android') {
-        return (
-            <TouchableNativeFeedback
-                onPress={() => {
-                    if (longPressFiredRef.current) { longPressFiredRef.current = false; return; }
-                    onPress();
-                }}
-                onLongPress={() => {
-                    longPressFiredRef.current = true;
-                    startLongPressInk();
-                }}
-                onPressIn={(e: any) => primeInk(e)}
-                onPressOut={() => {
-                    longPressFiredRef.current = false;
-                    Animated.timing(inkOpacity, { toValue: 0, duration: 140, useNativeDriver: true }).start();
-                }}
-                background={TouchableNativeFeedback.Ripple('rgba(103,51,208,0.20)', false)}
-                useForeground
-                delayLongPress={240}
-                accessibilityRole="button"
-            >
-                <View onLayout={onLayout} style={styles.row}>
-                    <AvatarPicker
-                        uri={item.profilePicture}
-                        name={item.name}
-                        size={48}
-                        style={styles.avatarImage}
-                        fallbackStyle={styles.avatar}
-                        textStyle={styles.avatarText}
-                        previewEnabled={false}
-                    />
-                    <View style={styles.rowContent}>
-                        <View style={styles.rowTop}>
-                            <Text style={[styles.name, (item.unreadCount ?? 0) > 0 && styles.nameUnread]} numberOfLines={1}>{item.name}</Text>
-                            <Text style={[styles.time, (item.unreadCount ?? 0) > 0 && styles.timeUnread]} numberOfLines={1}>{formatChatTime(item.Date)}</Text>
-                        </View>
-                        <View style={styles.rowBottom}>
-                            <Text style={[styles.lastMessage, (item.unreadCount ?? 0) > 0 && styles.lastMessageUnread]} numberOfLines={1}>{item.lastMessage}</Text>
-                            {(item.unreadCount ?? 0) > 0 && (
-                                <View style={styles.unreadBadge}>
-                                    <Text style={styles.unreadBadgeText}>{(item.unreadCount ?? 0) > 99 ? '99+' : item.unreadCount}</Text>
-                                </View>
-                            )}
-                        </View>
-                    </View>
-                </View>
-            </TouchableNativeFeedback>
-        );
-    }
-
-    return rowBody;
 };
 
-const GlobalChatRow = ({
-    item,
-    action,
-}: {
-    item: GlobalChatListItem;
-    action: ChatRowAction;
-}) => {
-    const variant = action.variant ?? 'ghost';
-    const spinnerColor = variant === 'primary' ? '#fff' : '#6733d0';
+export const GlobalChatRow = ({ item, action }: { item: GlobalChatListItem; action: ChatRowAction }) => {
+    const s = useStyles();
     return (
-        <View style={styles.row}>
-            <AvatarPicker
-                uri={item.profilePicture}
-                name={item.name}
-                size={48}
-                style={styles.avatarImage}
-                fallbackStyle={styles.avatar}
-                textStyle={styles.avatarText}
-                previewEnabled
-            />
-
-            <View style={styles.rowContent}>
-                <View style={styles.rowTop}>
-                    <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
-                </View>
+        <View style={s.row}>
+            <AvatarPicker uri={item.profilePicture} name={item.name} size={52} previewEnabled />
+            <View style={s.rowContent}>
+                <Text style={s.name} numberOfLines={1}>
+                    {item.name}
+                </Text>
             </View>
-
-            <Pressable
+            <Button
+                title={action.label}
                 onPress={action.onPress}
-                disabled={action.disabled}
-                style={({ pressed }) => [
-                    styles.followButton,
-                    variant === 'primary' ? styles.followButtonPrimary : styles.followButtonGhost,
-                    action.disabled && styles.followButtonDisabled,
-                    pressed && !action.disabled && (variant === 'primary' ? styles.followButtonPressedPrimary : styles.followButtonPressed),
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={action.label}
-                hitSlop={10}
-            >
-                {action.loading ? (
-                    <ActivityIndicator size="small" color={spinnerColor} />
-                ) : (
-                    <Text
-                        style={[
-                            styles.followButtonText,
-                            variant === 'primary' ? styles.followButtonTextPrimary : styles.followButtonTextGhost,
-                            action.disabled && styles.followButtonTextDisabled,
-                        ]}
-                        numberOfLines={1}
-                    >
-                        {action.label}
-                    </Text>
-                )}
-            </Pressable>
+                disabled={action.disabled && !action.loading}
+                loading={action.loading}
+                variant={action.variant === 'primary' ? 'filled' : 'tinted'}
+                size="sm"
+                style={s.followButton}
+                accessibilityLabel={`${action.label} ${item.name}`}
+            />
         </View>
     );
 };
@@ -436,15 +207,22 @@ const previewOf = (m: LocalMessage): string => {
     }
 };
 
+type ListRow = { kind: 'chat'; chat: ChatListItem } | { kind: 'user'; user: GlobalChatListItem };
+
+const LARGE_TITLE_HEIGHT = 52;
+
 const ChatsScreen = ({ navigation }: { navigation: any }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
     const { refreshUnreadCount } = useUnread();
 
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
     const { engine } = useE2EE();
 
-    const insets = useSafeAreaInsets();
-    const horizontalSafePad = 12 + Math.max(insets.left, insets.right);
+    const navHeight = useNavBarHeight();
+    const bottomClearance = useTabBarClearance();
+    const { scrollY, onScroll } = useScrollEdge();
 
     const [query, setQuery] = useState('');
     const [searchMode, setSearchMode] = useState<'local' | 'global'>('local');
@@ -461,9 +239,6 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
 
     const searchInputRef = useRef<TextInput | null>(null);
-    const focusAnim = useRef(new Animated.Value(0)).current;
-    const modeAnim = useRef(new Animated.Value(0)).current; // 0 = local, 1 = global
-    const spinAnim = useRef(new Animated.Value(0)).current;
     const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const apiOrigin = API_ORIGIN;
@@ -582,32 +357,6 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         });
     });
 
-    useEffect(() => {
-        Animated.timing(modeAnim, {
-            toValue: searchMode === 'global' ? 1 : 0,
-            duration: 180,
-            useNativeDriver: true,
-        }).start();
-    }, [modeAnim, searchMode]);
-
-    useEffect(() => {
-        if (!globalSearching) {
-            spinAnim.stopAnimation();
-            spinAnim.setValue(0);
-            return;
-        }
-
-        const loop = Animated.loop(
-            Animated.timing(spinAnim, {
-                toValue: 1,
-                duration: 900,
-                useNativeDriver: true,
-            })
-        );
-        loop.start();
-        return () => loop.stop();
-    }, [globalSearching, spinAnim]);
-
     const runGlobalSearch = useCallback(async (raw: string) => {
         const q = raw.trim();
         if (!q) {
@@ -644,11 +393,6 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
                         const errJson = await res.json();
                         if (typeof errJson?.message === 'string' && errJson.message.trim()) {
                             message = errJson.message;
-                        }
-                    } else {
-                        const errText = await res.text();
-                        if (typeof errText === 'string' && errText.trim()) {
-                            message = `Search failed (HTTP ${res.status}).`;
                         }
                     }
                 } catch {
@@ -714,7 +458,7 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
     }, [query, chatRows]);
 
     const globalAsChatRows: GlobalChatListItem[] = useMemo(() => {
-        return globalResults.map((u, index) => {
+        return globalResults.map((u) => {
             const id = typeof u.id === 'string' ? u.id.trim() : '';
             const username = String(u.username ?? '').trim();
             return {
@@ -727,6 +471,14 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
             };
         });
     }, [globalResults]);
+
+    const rows: ListRow[] = useMemo(
+        () =>
+            showingGlobal
+                ? globalAsChatRows.map((u) => ({ kind: 'user' as const, user: u }))
+                : filteredChats.map((c) => ({ kind: 'chat' as const, chat: c })),
+        [showingGlobal, globalAsChatRows, filteredChats]
+    );
 
     const relationshipOf = (targetUserId: string): Relationship => relationshipById[targetUserId] ?? 'none';
     const isPending = (targetUserId: string) => !!followPendingById[targetUserId];
@@ -752,693 +504,246 @@ const ChatsScreen = ({ navigation }: { navigation: any }) => {
         }
     };
 
-    const ListEmpty = () => (
-        <View style={styles.emptyWrap}>
-            <Text style={styles.emptyTitle}>
-                {showingGlobal
-                    ? globalSearching
-                        ? 'Searching…'
-                        : globalError
-                            ? 'Search failed'
-                            : 'No users found'
-                    : query.trim()
-                        ? 'No chats found'
-                        : 'No chats yet'}
-            </Text>
-            <Text style={styles.emptySubtitle}>
-                {showingGlobal
-                    ? globalError
-                        ? globalError
-                        : globalSearching
-                            ? 'Looking for users…'
-                            : 'Try a different search term.'
-                    : query.trim()
-                        ? 'Try a different search term.'
-                        : 'Users you message will appear here in realtime.'}
-            </Text>
-        </View>
-    );
+    const switchMode = (index: number) => {
+        if (index === 0) {
+            setSearchMode('local');
+            setShowingGlobal(false);
+            setGlobalResults([]);
+            setGlobalError(null);
+        } else {
+            setSearchMode('global');
+            setGlobalError(null);
+            setShowingGlobal(true);
+            void runGlobalSearch(query);
+        }
+        searchInputRef.current?.focus();
+    };
 
+    const openChat = (item: ChatListItem) => {
+        // Clear unread badge for this chat immediately
+        setChatRows((prev) => prev.map((row) => (row.id === item.id ? { ...row, unreadCount: 0 } : row)));
+        navigation.navigate('Chatroom', {
+            peerId: item.id,
+            peerUsername: item.name,
+            peerAvatar: item.profilePicture,
+        });
+    };
 
-    const renderChatItem = ({ item }: { item: ChatListItem }) => (
-        <ChatRow
-            item={item}
-            onPress={() => {
-                // Clear unread badge for this chat immediately
-                setChatRows((prev) =>
-                    prev.map((row) =>
-                        row.id === item.id ? { ...row, unreadCount: 0 } : row
-                    )
-                );
-                navigation.navigate('Chatroom', {
-                    peerId: item.id,
-                    peerUsername: item.name,
-                    peerAvatar: item.profilePicture,
-                });
-            }}
-        />
-    );
+    const renderItem = ({ item }: { item: ListRow }) => {
+        if (item.kind === 'chat') return <ChatRow item={item.chat} onPress={() => openChat(item.chat)} />;
 
-    const renderGlobalItem = ({ item }: { item: GlobalChatListItem }) => {
-        const targetUserId = String(item.id ?? '').trim();
+        const targetUserId = String(item.user.id ?? '').trim();
         const pending = targetUserId ? isPending(targetUserId) : false;
         const relationship = targetUserId ? relationshipOf(targetUserId) : 'none';
-
         const action: ChatRowAction = {
             label: relationshipLabel[relationship],
             onPress: () => {
-                void runRelationshipAction(targetUserId, item.name);
+                void runRelationshipAction(targetUserId, item.user.name);
             },
             disabled: pending || !targetUserId || !currentUserId || targetUserId === currentUserId,
             variant: isPrimaryRelationshipAction(relationship) ? 'primary' : 'ghost',
             loading: pending,
         };
-
-        return <GlobalChatRow item={item} action={action} />;
+        return <GlobalChatRow item={item.user} action={action} />;
     };
 
-    const blurSearch = useCallback(() => {
-        searchInputRef.current?.blur();
-        Keyboard.dismiss();
-    }, []);
+    const listEmpty = (() => {
+        if (showingGlobal) {
+            if (globalSearching) return <EmptyState icon="search" title="Searching…" message="Looking for users…" />;
+            if (globalError) return <EmptyState icon="cloud-offline-outline" title="Search failed" message={globalError} actionTitle="Try again" onAction={() => void runGlobalSearch(query)} />;
+            return <EmptyState icon="person-outline" title="No users found" message="Try a different search term." />;
+        }
+        if (query.trim()) return <EmptyState icon="search" title="No chats found" message="Try a different search term." />;
+        return (
+            <EmptyState
+                icon="chatbubbles-outline"
+                title="No chats yet"
+                message="Users you message will appear here in realtime."
+                actionTitle="Find people"
+                onAction={() => switchMode(1)}
+            />
+        );
+    })();
 
-    return (  
-        <SafeAreaView style={styles.container} edges={['top']}>
-            <TouchableWithoutFeedback onPress={blurSearch} accessible={false}>
-            <View style={styles.container}>
-            <View style={[styles.header, { paddingHorizontal: horizontalSafePad }]}>
-                <View style={styles.headerTitleWrapRow}>
-                    <SvgXml xml={CHAT_HEADER_ICON_XML} width={22} height={22} />
-                    <Text style={styles.headerTitle}>TalkNow</Text>
-                </View>
-                <RippleButton
-                    onPress={() => {
-                        setHasUnreadNotifications(false);
-                        navigation.navigate('Notifications');
-                    }}
-                    hitSlop={10}
-                    borderless
-                    style={styles.notification}
-                    rippleColor="rgba(103,51,208,0.22)"
-                    accessibilityLabel="Notifications"
-                >
-                    <View style={styles.notificationIconWrap}>
-                        <Ionicons name="notifications" size={22} color="#1a1073" />
-                        {hasUnreadNotifications && <View style={styles.notificationDot} />}
-                    </View>
-                </RippleButton>
+    const header = (
+        <View style={s.header}>
+            <View style={s.largeTitleRow}>
+                <SvgXml xml={chatGlyph(colors.wordmark)} width={26} height={26} />
+                <Text style={s.largeTitle} accessibilityRole="header">
+                    TalkNow
+                </Text>
             </View>
-
-            <View style={[styles.searchWrap, { paddingHorizontal: horizontalSafePad }]}>
-                <Animated.View
-                    style={[
-                        styles.searchbar,
-                        {
-                            transform: [
-                                {
-                                    scale: focusAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.01] }),
-                                },
-                            ],
-                        },
-                    ]}
-                >
-                    <View pointerEvents="none" style={styles.searchbarRingWrap}>
-                        <Animated.View
-                            style={[
-                                styles.searchbarRing,
-                                {
-                                    opacity: focusAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }),
-                                    transform: [
-                                        {
-                                            scale: focusAnim.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }),
-                                        },
-                                    ],
-                                },
-                            ]}
-                        />
-                    </View>
-
-                    <TextInput
-                        ref={(node) => {
-                            searchInputRef.current = node;
-                        }}
-                        placeholder={searchMode === 'global' ? 'Search users' : 'Search chats'}
-                        placeholderTextColor="#666"
-                        style={styles.searchInput}
-                        value={query}
-                        onChangeText={(text) => {
-                            setQuery(text);
-                            if (searchMode === 'local') {
-                                setShowingGlobal(false);
-                                setGlobalResults([]);
-                                setGlobalError(null);
-                            }
-                        }}
-                        onFocus={() => {
-                            Animated.timing(focusAnim, {
-                                toValue: 1,
-                                duration: 160,
-                                useNativeDriver: true,
-                            }).start();
-                        }}
-                        onBlur={() => {
-                            Animated.timing(focusAnim, {
-                                toValue: 0,
-                                duration: 160,
-                                useNativeDriver: true,
-                            }).start();
-                        }}
-                        autoCorrect={false}
-                        autoCapitalize="none"
-                        clearButtonMode="while-editing"
-                        returnKeyType="search"
-                        onSubmitEditing={() => {
-                            if (searchMode === 'global') {
-                                void runGlobalSearch(query);
-                            }
-                        }}
-                    />
-{/* searching query logic frontend */}
-                    {query.trim().length > 0 ? (
-                        <Pressable
-                            onPress={() => {
-                                setQuery('');
-                                setShowingGlobal(false);
-                                setGlobalResults([]);
-                                setGlobalError(null);
-                                setGlobalSearching(false);
-                                searchInputRef.current?.focus();
-                            }}
-                            style={({ pressed }) => [styles.clearButton, pressed && styles.rowPressed]}
-                            android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
-                            hitSlop={10}
-                            accessibilityRole="button"
-                            accessibilityLabel="Clear search"
-                        >
-                            <Ionicons name="close" size={18} color="#6733d0" />
-                        </Pressable>
-                    ) : null}
-{/* Global search logic */}
-                    <Pressable
-                        onPress={() => {
-                            if (searchMode === 'global') {
-                                void runGlobalSearch(query);
-                            } else {
-                                searchInputRef.current?.focus();
-                            }
-                        }}
-                        style={({ pressed }) => [styles.searchIconButton, pressed && styles.rowPressed]}
-                        android_ripple={Platform.OS === 'android' ? { color: '#e9e2ff' } : undefined}
-                        hitSlop={10}
-                        accessibilityRole="button"
-                        accessibilityLabel="Search"
-                    >
-                        <Animated.View
-                            style={{
-                                transform: [
-                                    {
-                                        rotate: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }),
-                                    },
-                                ],
-                                opacity:
-                                    searchMode === 'global'
-                                        ? globalSearching
-                                            ? 0.9
-                                            : 1
-                                        : 0.85,
-                            }}
-                        >
-                            <Ionicons name="search" size={20} color="#6733d0" />
-                        </Animated.View>
-                    </Pressable>
-                </Animated.View>
-
-                <View style={styles.modeToggleRow}>
-                    <View style={styles.modeToggle}>
-                        <Animated.View
-                            pointerEvents="none"
-                            style={[
-                                styles.modeTogglePill,
-                                {
-                                    transform: [
-                                        {
-                                            translateX: modeAnim.interpolate({
-                                                inputRange: [0, 1],
-                                                outputRange: [0, MODE_TOGGLE_PILL_WIDTH],
-                                            }),
-                                        },
-                                    ],
-                                },
-                            ]}
-                        />
-
-                        <Pressable
-                            onPress={() => {
-                                setSearchMode('local');
-                                setShowingGlobal(false);
-                                setGlobalResults([]);
-                                setGlobalError(null);
-                                searchInputRef.current?.focus();
-                            }}
-                            style={styles.modeToggleButton}
-                            accessibilityRole="button"
-                            accessibilityLabel="Search chats"
-                        >
-                            <Animated.Text
-                                style={[
-                                    styles.modeToggleText,
-                                    {
-                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.7] }),
-                                    },
-                                ]}
-                            >
-                                Chats
-                            </Animated.Text>
-                        </Pressable>
-
-                        <Pressable
-                            onPress={() => {
-                                setSearchMode('global');
-                                setGlobalError(null);
-                                setShowingGlobal(true);
-                                void runGlobalSearch(query);
-                                searchInputRef.current?.focus();
-                            }}
-                            style={styles.modeToggleButton}
-                            accessibilityRole="button"
-                            accessibilityLabel="Search users"
-                        >
-                            <Animated.Text
-                                style={[
-                                    styles.modeToggleText,
-                                    {
-                                        opacity: modeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
-                                    },
-                                ]}
-                            >
-                                Users
-                            </Animated.Text>
-                        </Pressable>
-                    </View>
-                </View>
-            </View>
-
-            {showingGlobal && globalError ? (
-                <View style={[styles.globalErrorWrap, { paddingHorizontal: horizontalSafePad }]}>
-                    <View style={styles.globalErrorInner}>
-                        <Text style={styles.globalErrorText} numberOfLines={2}>
-                            {globalError}
-                        </Text>
-                    </View>
-                </View>
+            <SearchField
+                ref={searchInputRef}
+                placeholder={searchMode === 'global' ? 'Search users' : 'Search chats'}
+                value={query}
+                searching={showingGlobal && globalSearching}
+                onChangeText={(text) => {
+                    setQuery(text);
+                    if (searchMode === 'local') {
+                        setShowingGlobal(false);
+                        setGlobalResults([]);
+                        setGlobalError(null);
+                    }
+                }}
+                onClear={() => {
+                    setQuery('');
+                    setShowingGlobal(false);
+                    setGlobalResults([]);
+                    setGlobalError(null);
+                    setGlobalSearching(false);
+                    searchInputRef.current?.focus();
+                }}
+                onSubmitEditing={() => {
+                    if (searchMode === 'global') void runGlobalSearch(query);
+                }}
+                testID="chats-search"
+            />
+            <SegmentedControl
+                segments={['Chats', 'Users']}
+                selectedIndex={searchMode === 'global' ? 1 : 0}
+                onChange={switchMode}
+                style={s.segmented}
+                testID="chats-mode"
+            />
+            {showingGlobal && globalError && rows.length > 0 ? (
+                <Notice tone="danger" icon="alert-circle-outline" style={s.inlineError}>
+                    {globalError}
+                </Notice>
             ) : null}
+        </View>
+    );
 
-            {showingGlobal ? (
-                <FlatList
-                    data={globalAsChatRows}
-                    keyExtractor={(item, index) => (item.id ? String(item.id) : `missing-id-${index}`)}
-                    renderItem={renderGlobalItem}
-                    extraData={{ relationshipById, followPendingById, currentUserId }}
-                    style={styles.list}
-                    contentContainerStyle={styles.listContent}
-                    keyboardShouldPersistTaps="handled"
-                    keyboardDismissMode="on-drag"
-                    ListEmptyComponent={ListEmpty}
-                    showsVerticalScrollIndicator={false}
-                />
-            ) : (
-                <FlatList
-                    data={filteredChats}
-                    keyExtractor={(item, index) => String(item.id ?? index)}
-                    renderItem={renderChatItem}
-                    style={styles.list}
-                    contentContainerStyle={styles.listContent}
-                    keyboardShouldPersistTaps="handled"
-                    keyboardDismissMode="on-drag"
-                    ListEmptyComponent={ListEmpty}
-                    showsVerticalScrollIndicator={false}
-                />
-            )}
-            </View>
-            </TouchableWithoutFeedback>
-        </SafeAreaView>
+    return (
+        <View style={s.screen}>
+            <Animated.FlatList
+                data={rows}
+                keyExtractor={(row, index) =>
+                    row.kind === 'chat' ? `c-${String(row.chat.id ?? index)}` : row.user.id ? `u-${row.user.id}` : `missing-id-${index}`
+                }
+                renderItem={renderItem}
+                extraData={{ relationshipById, followPendingById, currentUserId }}
+                ItemSeparatorComponent={() => <View style={s.separator} />}
+                ListHeaderComponent={header}
+                ListEmptyComponent={listEmpty}
+                onScroll={onScroll}
+                scrollEventThrottle={16}
+                contentContainerStyle={{ paddingTop: navHeight - 8, paddingBottom: bottomClearance }}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+                showsVerticalScrollIndicator={false}
+            />
+            <NavBar
+                title="TalkNow"
+                scrollY={scrollY}
+                titleRevealAt={LARGE_TITLE_HEIGHT - 4}
+                trailing={
+                    <IconButton
+                        name={hasUnreadNotifications ? 'notifications' : 'notifications-outline'}
+                        dot={hasUnreadNotifications}
+                        color={colors.tintText}
+                        onPress={() => {
+                            setHasUnreadNotifications(false);
+                            navigation.navigate('Notifications');
+                        }}
+                        accessibilityLabel={hasUnreadNotifications ? 'Notifications, new activity' : 'Notifications'}
+                        testID="chats-notifications"
+                    />
+                }
+            />
+        </View>
     );
 };
-const styles = StyleSheet.create({
-    container: {
+
+const useStyles = makeStyles((t) => ({
+    screen: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: t.colors.ground,
     },
     header: {
-        width: '100%',
-        height: 56,
-        backgroundColor: '#fff',
-        top: 0,
-        left: 0,
-        right: 0,
-        display: 'flex',
+        paddingHorizontal: t.space.gutter,
+        paddingBottom: t.space.sm,
+        gap: t.space.md,
+    },
+    largeTitleRow: {
+        height: LARGE_TITLE_HEIGHT,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 12,
+        gap: t.space.sm,
     },
-    headerTitle: {
-        color: '#710b8d',
-        fontSize: 26,
-        fontWeight: '600',
-        marginLeft: 8,
+    largeTitle: {
+        ...t.type.largeTitle,
+        color: t.colors.wordmark,
     },
-    headerTitleWrapRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
+    segmented: {
+        alignSelf: 'flex-start',
+        width: 176,
     },
-    rowPressed: {
-        backgroundColor: 'rgba(233,226,255,0.42)',
-    },
-    headerSubtitle: {
-        color: '#710b8d',
-        fontSize: 12,
-        opacity: 0.9,
-    },
-    searchWrap: {
-        width: '100%',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingTop: 10,
-        paddingBottom: 6,
-    },
-    searchbar: {
-        width: '100%',
-        maxWidth: 420,
-        minHeight: 44,
-        borderWidth: 1,
-        borderColor: '#9d7bdd',
-        borderRadius: 30,
-        paddingLeft: 10,
-        paddingRight: 6,
-        backgroundColor: '#e1ade6fff',
-        flexDirection: 'row',
-        alignItems: 'center',
-        overflow: 'hidden',
-        position: 'relative',
-    },
-    searchbarRingWrap: {
-        ...StyleSheet.absoluteFillObject,
-        padding: 0,
-        alignItems: 'stretch',
-        justifyContent: 'center',
-        pointerEvents: 'none',
-    },
-    searchbarRing: {
-        ...StyleSheet.absoluteFillObject,
-        borderRadius: 30,
-        borderWidth: 2,
-        borderColor: '#b29fd6',
-    },
-    modeToggleRow: {
-        width: '100%',
-        maxWidth: 420,
-        marginTop: 8,
-        alignItems: 'flex-start',
-    },
-    modeToggle: {
-        height: 32,
-        width: MODE_TOGGLE_WIDTH,
-        borderRadius: 16,
-        backgroundColor: '#e9e2ff',
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: MODE_TOGGLE_PADDING,
-        position: 'relative',
-    },
-    modeTogglePill: {
-        position: 'absolute',
-        top: MODE_TOGGLE_PADDING,
-        left: MODE_TOGGLE_PADDING,
-        width: MODE_TOGGLE_PILL_WIDTH,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: '#fff',
-        borderWidth: 1,
-        borderColor: 'rgba(53,13,129,0.18)',
-    },
-    modeToggleButton: {
-        flex: 1,
-        height: 28,
-        borderRadius: 14,
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-    },
-    modeToggleText: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#000000',
-        textAlign: 'center',
-        includeFontPadding: false,
-    },
-    searchInput: {
-        flex: 1,
-        height: 44,
-        paddingVertical: 0,
-        paddingRight: 10,
-        color: '#111',
-    },
-    clearButton: {
-        width: 32,
-        height: 32,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: 16,
-        overflow: 'hidden',
-        marginRight: 2,
-    },
-    searchIconButton: {
-        width: 36,
-        height: 36,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: 18,
-        overflow: 'hidden',
-    },
-    globalErrorWrap: {
-        width: '100%',
-        alignItems: 'center',
-        paddingTop: 6,
-        paddingBottom: 4,
-    },
-    globalErrorInner: {
-        width: '100%',
-        maxWidth: 420,
-    },
-    globalErrorText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#b00020',
-    },
-    list: {
-        flex: 1,
-        width: '100%',
-    },
-    listContent: {
-        paddingTop: 8,
-        paddingBottom: 14,
+    inlineError: {
+        marginTop: t.space.xs,
     },
     row: {
-        width: '100%',
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
-        position: 'relative',
-        overflow: 'hidden',
+        gap: t.space.md,
+        paddingHorizontal: t.space.gutter,
+        paddingVertical: t.space.md,
+        minHeight: 76,
     },
-    rippleLayer: {
-        ...StyleSheet.absoluteFillObject,
+    rowPressed: {
+        backgroundColor: t.colors.pressedOverlay,
     },
-    avatar: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor: '#e9e2ff',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 12,
-    },
-    avatarImage: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        marginRight: 12,
-        backgroundColor: '#e9e2ff',
-    },
-    avatarText: {
-        color: '#350d81',
-        fontSize: 18,
-        fontWeight: '700',
+    separator: {
+        height: t.size.hairline,
+        backgroundColor: t.colors.separator,
+        marginLeft: t.space.gutter + 52 + t.space.md,
     },
     rowContent: {
         flex: 1,
         minWidth: 0,
-        paddingVertical: 4,
-    },
-    followButton: {
-        minWidth: 104,
-        paddingHorizontal: 14,
-        height: 32,
-        borderRadius: 16,
-        borderWidth: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        marginLeft: 10,
-    },
-    followButtonPrimary: {
-        backgroundColor: '#6733d0',
-        borderColor: '#6733d0',
-    },
-    followButtonGhost: {
-        backgroundColor: '#fff',
-        borderColor: '#6733d0',
-    },
-    followButtonPressed: {
-        backgroundColor: 'rgba(233,226,255,0.42)',
-    },
-    followButtonPressedPrimary: {
-        opacity: 0.88,
-    },
-    followButtonDisabled: {
-        opacity: 0.6,
-    },
-    followButtonText: {
-        fontSize: 12,
-        fontWeight: '800',
-        textAlign: 'center',
-        includeFontPadding: false,
-    },
-    followButtonTextPrimary: {
-        color: '#fff',
-    },
-    followButtonTextGhost: {
-        color: '#6733d0',
-    },
-    followButtonTextDisabled: {
-        // Keep same color; opacity is handled by the container.
+        gap: 2,
     },
     rowTop: {
         flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 2,
-        minWidth: 0,
+        alignItems: 'baseline',
+        gap: t.space.sm,
     },
     name: {
         flex: 1,
-        flexShrink: 1,
-        fontSize: 16,
-        fontWeight: '600',
-        marginRight: 8,
-    },
-    time: {
-        fontSize: 12,
-        color: '#666',
-        flexShrink: 0,
-        textAlign: 'right',
-    },
-    lastMessage: {
-        fontSize: 13,
-        color: '#666',
-        flexShrink: 1,
-        flex: 1,
-    },
-    lastMessageUnread: {
-        color: '#111',
-        fontWeight: '600',
+        ...t.type.headline,
+        color: t.colors.label,
     },
     nameUnread: {
-        fontWeight: '800',
+        fontWeight: '700',
+    },
+    time: {
+        ...t.type.subhead,
+        color: t.colors.secondaryLabel,
+        fontVariant: ['tabular-nums'],
     },
     timeUnread: {
-        color: '#25d366',
+        color: t.colors.tintText,
         fontWeight: '600',
     },
     rowBottom: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
+        gap: t.space.sm,
     },
-    unreadBadge: {
-        minWidth: 20,
-        height: 20,
-        borderRadius: 10,
-        backgroundColor: '#25d366',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 5,
-        marginLeft: 8,
-        flexShrink: 0,
+    lastMessage: {
+        flex: 1,
+        ...t.type.subhead,
+        color: t.colors.secondaryLabel,
     },
-    unreadBadgeText: {
-        color: '#fff',
-        fontSize: 11,
-        fontWeight: '800',
-        includeFontPadding: false,
+    lastMessageUnread: {
+        color: t.colors.label,
     },
-
-    emptyWrap: {
-        width: '100%',
-        maxWidth: 520,
-        alignSelf: 'center',
-        paddingHorizontal: 16,
-        paddingTop: 28,
-        alignItems: 'center',
+    badge: {
+        marginTop: 1,
     },
-    emptyTitle: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#111',
-        marginBottom: 6,
-        textAlign: 'center',
+    followButton: {
+        minWidth: 92,
     },
-    emptySubtitle: {
-        fontSize: 13,
-        color: '#666',
-        textAlign: 'center',
-    },
-    notification: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        alignItems: 'center',
-        justifyContent: 'center',
-    }
-    ,
-    notificationIconWrap: {
-        width: 22,
-        height: 22,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    notificationDot: {
-        position: 'absolute',
-        top: -1,
-        right: -1,
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: '#6733d0',
-        borderWidth: 1,
-        borderColor: '#fff',
-    },
-    notificationPressed: {
-        opacity: 0.75,
-    }
-});
-
-
-
-
+}));
 
 export default ChatsScreen;
-

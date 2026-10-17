@@ -1,21 +1,9 @@
+import { BottomSheet, Button, PressableScale, haptics } from '@/app/components/ui';
 import { blockUser, getAuthErrorMessage, reportUser, unblockUser, type ReportReason } from '@/services/AuthService';
+import { makeStyles, useTheme } from '@/src/theme';
+import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useState } from 'react';
-import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-} from 'react-native';
-
-const PURPLE = '#6733d0';
-const INK = '#1a1a2e';
-const MUTED = '#6b7280';
+import { Alert, Text, TextInput, View } from 'react-native';
 
 const REASONS: { value: ReportReason; label: string }[] = [
     { value: 'spam', label: 'Spam' },
@@ -109,6 +97,8 @@ const ReportSheet = ({
     onClose: () => void;
     onBlockRequested: () => void;
 }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
     const [reason, setReason] = useState<ReportReason | null>(null);
     const [details, setDetails] = useState('');
     const [sending, setSending] = useState(false);
@@ -125,6 +115,7 @@ const ReportSheet = ({
         try {
             await reportUser(userId, reason, details.trim());
             close();
+            haptics.success();
             Alert.alert(
                 'Report sent',
                 "Thanks for letting us know. We'll review it.",
@@ -143,87 +134,101 @@ const ReportSheet = ({
     };
 
     return (
-        <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
-            <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={close} />
-                <View style={styles.sheet}>
-                    <Text style={styles.title}>Report {username}</Text>
-                    <Text style={styles.subtitle}>Why are you reporting this account?</Text>
-
-                    {REASONS.map((r) => (
-                        <Pressable
+        <BottomSheet
+            visible={visible}
+            onClose={close}
+            dismissible={!sending}
+            title={`Report ${username}`}
+            subtitle="Why are you reporting this account?"
+        >
+            <View style={s.reasons} accessibilityRole="radiogroup">
+                {REASONS.map((r, i) => {
+                    const on = reason === r.value;
+                    return (
+                        <PressableScale
                             key={r.value}
-                            onPress={() => setReason(r.value)}
-                            style={({ pressed }) => [styles.reason, pressed && styles.pressed]}
+                            onPress={() => {
+                                haptics.selection();
+                                setReason(r.value);
+                            }}
+                            scaleTo={1}
+                            style={[s.reason, i > 0 && s.reasonDivider]}
+                            pressedStyle={s.reasonPressed}
                             accessibilityRole="radio"
-                            accessibilityState={{ selected: reason === r.value }}
+                            accessibilityState={{ selected: on, checked: on }}
+                            accessibilityLabel={r.label}
                         >
-                            <View style={[styles.radio, reason === r.value && styles.radioOn]} />
-                            <Text style={styles.reasonText}>{r.label}</Text>
-                        </Pressable>
-                    ))}
+                            <Text style={s.reasonText}>{r.label}</Text>
+                            <Ionicons
+                                name={on ? 'checkmark-circle' : 'ellipse-outline'}
+                                size={22}
+                                color={on ? colors.tintText : colors.tertiaryLabel}
+                            />
+                        </PressableScale>
+                    );
+                })}
+            </View>
 
-                    <TextInput
-                        style={styles.details}
-                        value={details}
-                        onChangeText={setDetails}
-                        placeholder="Add details (optional)"
-                        placeholderTextColor={MUTED}
-                        multiline
-                        maxLength={1000}
-                    />
+            <TextInput
+                style={s.details}
+                value={details}
+                onChangeText={setDetails}
+                placeholder="Add details (optional)"
+                placeholderTextColor={colors.placeholder}
+                selectionColor={colors.tintText}
+                multiline
+                maxLength={1000}
+                accessibilityLabel="Details"
+            />
 
-                    <View style={styles.buttons}>
-                        <Pressable onPress={close} style={[styles.button, styles.cancel]} accessibilityRole="button">
-                            <Text style={styles.cancelText}>Cancel</Text>
-                        </Pressable>
-                        <Pressable
-                            onPress={() => void submit()}
-                            disabled={!reason || sending}
-                            style={[styles.button, styles.submit, (!reason || sending) && styles.disabled]}
-                            accessibilityRole="button"
-                        >
-                            {sending ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitText}>Send report</Text>}
-                        </Pressable>
-                    </View>
-                </View>
-            </KeyboardAvoidingView>
-        </Modal>
+            <View style={s.buttons}>
+                <Button title="Cancel" variant="gray" onPress={close} disabled={sending} style={s.flex1} />
+                <Button title="Send report" onPress={() => void submit()} disabled={!reason} loading={sending} style={s.flex1} />
+            </View>
+        </BottomSheet>
     );
 };
 
-const styles = StyleSheet.create({
-    backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-    sheet: {
-        backgroundColor: '#fff',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 20,
-        paddingBottom: 32,
+const useStyles = makeStyles((t) => ({
+    reasons: {
+        borderRadius: t.radius.lg,
+        backgroundColor: t.dark ? t.colors.surface : t.colors.ground,
+        overflow: 'hidden',
     },
-    title: { fontSize: 18, fontWeight: '700', color: INK },
-    subtitle: { fontSize: 14, color: MUTED, marginTop: 4, marginBottom: 12 },
-    reason: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
-    pressed: { opacity: 0.6 },
-    radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#d1d5db', marginRight: 12 },
-    radioOn: { borderColor: PURPLE, backgroundColor: PURPLE },
-    reasonText: { fontSize: 15, color: INK },
+    reason: {
+        minHeight: 50,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: t.space.lg,
+    },
+    reasonDivider: {
+        borderTopWidth: t.size.hairline,
+        borderTopColor: t.colors.separator,
+    },
+    reasonPressed: {
+        backgroundColor: t.colors.pressedOverlay,
+    },
+    reasonText: {
+        ...t.type.body,
+        color: t.colors.label,
+    },
     details: {
-        minHeight: 72,
-        borderWidth: 1,
-        borderColor: '#e5e7eb',
-        borderRadius: 12,
-        padding: 12,
-        marginTop: 8,
-        fontSize: 15,
-        color: INK,
+        minHeight: 80,
+        borderWidth: 1.5,
+        borderColor: t.colors.separator,
+        borderRadius: t.radius.md,
+        padding: t.space.md,
+        marginTop: t.space.lg,
+        ...t.type.callout,
+        color: t.colors.label,
+        backgroundColor: t.colors.surface,
         textAlignVertical: 'top',
     },
-    buttons: { flexDirection: 'row', marginTop: 16, gap: 12 },
-    button: { flex: 1, height: 48, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-    cancel: { backgroundColor: '#f3f4f6' },
-    cancelText: { fontSize: 15, fontWeight: '600', color: INK },
-    submit: { backgroundColor: PURPLE },
-    submitText: { fontSize: 15, fontWeight: '700', color: '#fff' },
-    disabled: { opacity: 0.5 },
-});
+    buttons: {
+        flexDirection: 'row',
+        marginTop: t.space.lg,
+        gap: t.space.md,
+    },
+    flex1: { flex: 1 },
+}));

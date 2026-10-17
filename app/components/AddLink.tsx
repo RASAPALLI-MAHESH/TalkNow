@@ -1,53 +1,22 @@
 /**
- * AddLink.tsx — Reusable "Add Link" component
+ * AddLink.tsx: the "Additional Links" section of a profile.
  *
- * Lets a user attach named hyperlinks to their profile (or any context).
- * Each entry has:
- *   - label  : display text  e.g. "My Portfolio"
- *   - url    : the full URL  e.g. "https://example.com"
- *
- * Features:
- *  - Animated modal sheet to add / edit a link
- *  - URL validation (must start with http:// or https://)
- *  - Inline list with edit + delete with swipe-hint reveal
- *  - Ripple press on each row (RippleButton)
- *  - Spring open/close animation on the modal
- *  - onChange(links) callback for parent integration
- *  - Fully self-contained — drop in anywhere
+ * Each entry has a label (display text) and a URL. Owners add, edit and
+ * delete links in a sheet; visitors see a read-only list that opens each link.
  *
  * Usage:
  *   <AddLink
- *       initialLinks={user.links}          // optional seed data
+ *       initialLinks={user.links}          // seed data; later changes to it are picked up
  *       onChange={(links) => save(links)}  // called on every add/edit/delete
  *       maxLinks={5}                       // default 5
  *   />
  */
 
-import React, {
-    memo,
-    useCallback,
-    useEffect,
-    useRef,
-    useState,
-} from 'react';
-import {
-    Animated,
-    Dimensions,
-    Keyboard,
-    KeyboardAvoidingView,
-    Linking,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
-} from 'react-native';
+import { BottomSheet, Button, IconButton, ListSection, PressableScale, TextField } from '@/app/components/ui';
+import { makeStyles, useTheme } from '@/src/theme';
 import { Ionicons } from '@expo/vector-icons';
-import RippleButton from '@/app/components/RippleButton';
+import React, { memo, useEffect, useRef, useState } from 'react';
+import { Alert, Keyboard, Linking, Text, TextInput, View } from 'react-native';
 
 /* ─── Types ─── */
 export type LinkEntry = {
@@ -65,22 +34,7 @@ type AddLinkProps = {
     readonly?: boolean;
 };
 
-/* ─── Tokens ─── */
-const PURPLE       = '#6733d0';
-const PURPLE_DARK  = '#4c1f9e';
-const PURPLE_LIGHT = '#ede6ff';
-const PURPLE_XLIGHT = '#f8f5ff';
-const WHITE        = '#ffffff';
-const INK          = '#1a1a2e';
-const INK_MUTED    = '#7b7b9d';
-const RED          = '#ef4444';
-const GREEN        = '#22c55e';
-const SEPARATOR    = 'rgba(103,51,208,0.08)';
-const SHADOW       = 'rgba(103,51,208,0.13)';
-
-const { height: SCREEN_H } = Dimensions.get('window');
-
-/* ─── URL validator ─── */
+/* ─── URL helpers ─── */
 const isValidUrl = (raw: string) => {
     try {
         const u = new URL(raw.trim());
@@ -95,6 +49,8 @@ const normalizeUrl = (raw: string): string => {
     if (/^https?:\/\//i.test(trimmed)) return trimmed;
     return `https://${trimmed}`;
 };
+
+const displayUrl = (url: string) => url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
 
 /* ─── Icon map for common domains ─── */
 const domainIcon = (url: string): keyof typeof Ionicons.glyphMap => {
@@ -125,6 +81,8 @@ const LinkRow = memo(({
     onDelete: () => void;
     readonly?: boolean;
 }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
     const icon = domainIcon(entry.url);
 
     const handleOpen = () => {
@@ -132,101 +90,36 @@ const LinkRow = memo(({
     };
 
     return (
-        <View style={rowStyles.container}>
-            <RippleButton
+        <View style={s.row}>
+            <PressableScale
                 onPress={handleOpen}
-                style={rowStyles.main}
-                rippleColor="rgba(103,51,208,0.12)"
+                scaleTo={1}
+                style={s.rowMain}
+                pressedStyle={s.rowPressed}
+                accessibilityRole="link"
+                accessibilityLabel={`${entry.label || 'Link'}, ${displayUrl(entry.url)}`}
             >
-                <View style={rowStyles.iconCircle}>
-                    <Ionicons name={icon} size={18} color={PURPLE} />
+                <View style={s.iconTile}>
+                    <Ionicons name={icon} size={18} color={colors.tintText} />
                 </View>
-                <View style={rowStyles.textWrap}>
-                    <Text style={rowStyles.label} numberOfLines={1}>{entry.label || 'Link'}</Text>
-                    <Text style={rowStyles.url} numberOfLines={1}>{entry.url}</Text>
+                <View style={s.rowText}>
+                    <Text style={s.rowLabel} numberOfLines={1}>{entry.label || 'Link'}</Text>
+                    <Text style={s.rowUrl} numberOfLines={1}>{displayUrl(entry.url)}</Text>
                 </View>
-                <Ionicons name="open-outline" size={14} color={INK_MUTED} />
-            </RippleButton>
+                {readonly && <Ionicons name="open-outline" size={16} color={colors.tertiaryLabel} />}
+            </PressableScale>
 
             {!readonly && (
-                <>
-                    {/* Edit */}
-                    <RippleButton
-                        onPress={onEdit}
-                        borderless
-                        style={rowStyles.action}
-                        rippleColor="rgba(103,51,208,0.18)"
-                        accessibilityLabel="Edit link"
-                    >
-                        <Ionicons name="pencil-outline" size={16} color={PURPLE} />
-                    </RippleButton>
-
-                    {/* Delete */}
-                    <RippleButton
-                        onPress={onDelete}
-                        borderless
-                        style={rowStyles.action}
-                        rippleColor="rgba(239,68,68,0.18)"
-                        accessibilityLabel="Delete link"
-                    >
-                        <Ionicons name="trash-outline" size={16} color={RED} />
-                    </RippleButton>
-                </>
+                <View style={s.rowActions}>
+                    <IconButton name="pencil" iconSize={17} color={colors.tintText} onPress={onEdit} accessibilityLabel={`Edit ${entry.label || 'link'}`} />
+                    <IconButton name="trash-outline" iconSize={17} color={colors.danger} onPress={onDelete} accessibilityLabel={`Delete ${entry.label || 'link'}`} />
+                </View>
             )}
         </View>
     );
 });
 
-const rowStyles = StyleSheet.create({
-    container: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: SEPARATOR,
-    },
-    main: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 13,
-        paddingHorizontal: 16,
-        gap: 12,
-        overflow: 'hidden',
-    },
-    iconCircle: {
-        width: 34,
-        height: 34,
-        borderRadius: 17,
-        backgroundColor: PURPLE_LIGHT,
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-    },
-    textWrap: {
-        flex: 1,
-        minWidth: 0,
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: INK,
-    },
-    url: {
-        fontSize: 12,
-        color: PURPLE,
-        marginTop: 1,
-    },
-    action: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginHorizontal: 2,
-    },
-});
-
-/* ─── Modal sheet for add / edit ─── */
+/* ─── Sheet for add / edit ─── */
 type SheetProps = {
     visible: boolean;
     editing: LinkEntry | null;
@@ -238,45 +131,14 @@ const AddEditSheet = memo(({ visible, editing, onClose, onSave }: SheetProps) =>
     const [label, setLabel] = useState('');
     const [url, setUrl]     = useState('');
     const [urlError, setUrlError] = useState('');
+    const urlRef = useRef<TextInput>(null);
 
-    const slideAnim  = useRef(new Animated.Value(SCREEN_H)).current;
-    const backdropAnim = useRef(new Animated.Value(0)).current;
-
-    /* Populate fields when editing */
+    /* Populate fields when the sheet opens */
     useEffect(() => {
-        if (visible) {
-            setLabel(editing?.label ?? '');
-            setUrl(editing?.url ?? '');
-            setUrlError('');
-            // Animate in
-            Animated.parallel([
-                Animated.spring(slideAnim, {
-                    toValue: 0,
-                    useNativeDriver: true,
-                    tension: 72,
-                    friction: 9,
-                }),
-                Animated.timing(backdropAnim, {
-                    toValue: 1,
-                    duration: 220,
-                    useNativeDriver: true,
-                }),
-            ]).start();
-        } else {
-            Animated.parallel([
-                Animated.spring(slideAnim, {
-                    toValue: SCREEN_H,
-                    useNativeDriver: true,
-                    tension: 72,
-                    friction: 9,
-                }),
-                Animated.timing(backdropAnim, {
-                    toValue: 0,
-                    duration: 180,
-                    useNativeDriver: true,
-                }),
-            ]).start();
-        }
+        if (!visible) return;
+        setLabel(editing?.label ?? '');
+        setUrl(editing?.url ?? '');
+        setUrlError('');
     }, [visible, editing]);
 
     const handleSave = () => {
@@ -296,212 +158,51 @@ const AddEditSheet = memo(({ visible, editing, onClose, onSave }: SheetProps) =>
     };
 
     const isNew = !editing;
+    const looksValid = url.trim().length > 0 && isValidUrl(normalizeUrl(url));
 
     return (
-        <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose} statusBarTranslucent>
-            <KeyboardAvoidingView
-                style={sheetStyles.root}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
-                {/* Backdrop */}
-                <Animated.View
-                    style={[sheetStyles.backdrop, { opacity: backdropAnim }]}
-                    pointerEvents="none"
+        <BottomSheet visible={visible} onClose={handleClose} title={isNew ? 'Add Link' : 'Edit Link'}>
+            <View style={{ gap: 16 }}>
+                <TextField
+                    label="Display text (optional)"
+                    icon="text-outline"
+                    placeholder="e.g. My Portfolio"
+                    value={label}
+                    onChangeText={setLabel}
+                    returnKeyType="next"
+                    autoCapitalize="words"
+                    maxLength={60}
+                    onSubmitEditing={() => urlRef.current?.focus()}
                 />
-                <Pressable style={sheetStyles.backdropHit} onPress={handleClose} />
-
-                {/* Sheet */}
-                <Animated.View style={[sheetStyles.sheet, { transform: [{ translateY: slideAnim }] }]}>
-                    {/* Handle */}
-                    <View style={sheetStyles.handle} />
-
-                    {/* Title row */}
-                    <View style={sheetStyles.titleRow}>
-                        <Text style={sheetStyles.title}>{isNew ? 'Add Link' : 'Edit Link'}</Text>
-                        <TouchableOpacity onPress={handleClose} hitSlop={12} accessibilityLabel="Close">
-                            <Ionicons name="close" size={22} color={INK_MUTED} />
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Label field */}
-                    <Text style={sheetStyles.fieldLabel}>Display Text <Text style={sheetStyles.optional}>(optional)</Text></Text>
-                    <View style={sheetStyles.inputRow}>
-                        <Ionicons name="text-outline" size={18} color={INK_MUTED} style={sheetStyles.inputIcon} />
-                        <TextInput
-                            style={sheetStyles.input}
-                            placeholder="e.g. My Portfolio"
-                            placeholderTextColor="rgba(103,51,208,0.35)"
-                            value={label}
-                            onChangeText={setLabel}
-                            returnKeyType="next"
-                            autoCapitalize="words"
-                            maxLength={60}
-                        />
-                    </View>
-
-                    {/* URL field */}
-                    <Text style={[sheetStyles.fieldLabel, { marginTop: 14 }]}>URL <Text style={sheetStyles.required}>*</Text></Text>
-                    <View style={[sheetStyles.inputRow, !!urlError && sheetStyles.inputRowError]}>
-                        <Ionicons name="link-outline" size={18} color={urlError ? RED : INK_MUTED} style={sheetStyles.inputIcon} />
-                        <TextInput
-                            style={sheetStyles.input}
-                            placeholder="https://example.com"
-                            placeholderTextColor="rgba(103,51,208,0.35)"
-                            value={url}
-                            onChangeText={(t) => { setUrl(t); setUrlError(''); }}
-                            returnKeyType="done"
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            keyboardType="url"
-                            maxLength={500}
-                            onSubmitEditing={handleSave}
-                        />
-                        {isValidUrl(normalizeUrl(url)) && (
-                            <Ionicons name="checkmark-circle" size={16} color={GREEN} style={{ marginRight: 6 }} />
-                        )}
-                    </View>
-                    {!!urlError && <Text style={sheetStyles.errorText}>{urlError}</Text>}
-
-                    {/* Save button */}
-                    <TouchableOpacity
+                <TextField
+                    ref={urlRef}
+                    label="URL"
+                    icon="link-outline"
+                    placeholder="https://example.com"
+                    value={url}
+                    onChangeText={(t) => { setUrl(t); setUrlError(''); }}
+                    error={urlError || undefined}
+                    success={!urlError && looksValid ? 'Looks good' : undefined}
+                    returnKeyType="done"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    textContentType="URL"
+                    maxLength={500}
+                    onSubmitEditing={handleSave}
+                />
+                <View style={{ flexDirection: 'row', gap: 12, marginTop: 4 }}>
+                    <Button title="Cancel" variant="gray" onPress={handleClose} style={{ flex: 1 }} />
+                    <Button
+                        title={isNew ? 'Add Link' : 'Save Changes'}
                         onPress={handleSave}
-                        style={[sheetStyles.saveBtn, !url.trim() && sheetStyles.saveBtnDisabled]}
                         disabled={!url.trim()}
-                        accessibilityRole="button"
-                        accessibilityLabel={isNew ? 'Add link' : 'Save changes'}
-                        activeOpacity={0.78}
-                    >
-                        <Ionicons name={isNew ? 'add-circle-outline' : 'save-outline'} size={18} color={WHITE} />
-                        <Text style={sheetStyles.saveBtnText}>{isNew ? 'Add Link' : 'Save Changes'}</Text>
-                    </TouchableOpacity>
-                </Animated.View>
-            </KeyboardAvoidingView>
-        </Modal>
+                        style={{ flex: 2 }}
+                    />
+                </View>
+            </View>
+        </BottomSheet>
     );
-});
-
-const sheetStyles = StyleSheet.create({
-    root: {
-        flex: 1,
-        justifyContent: 'flex-end',
-    },
-    backdrop: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'rgba(0,0,0,0.52)',
-    },
-    backdropHit: {
-        ...StyleSheet.absoluteFillObject,
-    },
-    sheet: {
-        backgroundColor: WHITE,
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        paddingHorizontal: 20,
-        paddingBottom: 36,
-        paddingTop: 12,
-        ...Platform.select({
-            ios: {
-                shadowColor: SHADOW,
-                shadowOffset: { width: 0, height: -4 },
-                shadowOpacity: 1,
-                shadowRadius: 20,
-            },
-            android: { elevation: 20 },
-        }),
-    },
-    handle: {
-        alignSelf: 'center',
-        width: 40,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: 'rgba(103,51,208,0.18)',
-        marginBottom: 16,
-    },
-    titleRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 20,
-    },
-    title: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: INK,
-    },
-    fieldLabel: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: INK_MUTED,
-        letterSpacing: 0.6,
-        textTransform: 'uppercase',
-        marginBottom: 6,
-    },
-    optional: {
-        color: INK_MUTED,
-        fontWeight: '400',
-        textTransform: 'none',
-        letterSpacing: 0,
-    },
-    required: {
-        color: RED,
-    },
-    inputRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: PURPLE_XLIGHT,
-        borderRadius: 14,
-        borderWidth: 1.5,
-        borderColor: PURPLE_LIGHT,
-        paddingHorizontal: 12,
-        minHeight: 48,
-    },
-    inputRowError: {
-        borderColor: RED,
-        backgroundColor: '#fff5f5',
-    },
-    inputIcon: {
-        marginRight: 8,
-    },
-    input: {
-        flex: 1,
-        fontSize: 15,
-        color: INK,
-        paddingVertical: Platform.OS === 'ios' ? 12 : 8,
-    },
-    errorText: {
-        fontSize: 12,
-        color: RED,
-        fontWeight: '600',
-        marginTop: 5,
-        marginLeft: 4,
-    },
-    saveBtn: {
-        marginTop: 24,
-        backgroundColor: PURPLE,
-        borderRadius: 16,
-        height: 52,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        ...Platform.select({
-            ios: {
-                shadowColor: PURPLE_DARK,
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.35,
-                shadowRadius: 10,
-            },
-            android: { elevation: 4 },
-        }),
-    },
-    saveBtnDisabled: {
-        opacity: 0.45,
-    },
-    saveBtnText: {
-        color: WHITE,
-        fontSize: 15,
-        fontWeight: '800',
-    },
 });
 
 /* ─── Main AddLink component ─── */
@@ -512,15 +213,28 @@ const AddLink = ({
     sectionTitle = 'Links',
     readonly = false,
 }: AddLinkProps) => {
+    const s = useStyles();
+    const { colors } = useTheme();
     const [links, setLinks] = useState<LinkEntry[]>(initialLinks);
     const [sheetVisible, setSheetVisible] = useState(false);
     const [editingEntry, setEditingEntry] = useState<LinkEntry | null>(null);
 
+    // The profile loads after this mounts: take the saved links when they arrive,
+    // otherwise the first edit would overwrite them with an empty list.
+    const seededRef = useRef(initialLinks.length > 0);
+    useEffect(() => {
+        if (!seededRef.current && initialLinks.length > 0) {
+            seededRef.current = true;
+            setLinks(initialLinks);
+        }
+    }, [initialLinks]);
+
     /* Notify parent on every mutation */
-    const updateLinks = useCallback((next: LinkEntry[]) => {
+    const updateLinks = (next: LinkEntry[]) => {
+        seededRef.current = true;
         setLinks(next);
         onChange?.(next);
-    }, [onChange]);
+    };
 
     const openAdd = () => {
         setEditingEntry(null);
@@ -532,8 +246,11 @@ const AddLink = ({
         setSheetVisible(true);
     };
 
-    const handleDelete = (id: string) => {
-        updateLinks(links.filter(l => l.id !== id));
+    const handleDelete = (entry: LinkEntry) => {
+        Alert.alert('Delete link?', `"${entry.label || displayUrl(entry.url)}" will be removed from your profile.`, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Delete', style: 'destructive', onPress: () => updateLinks(links.filter(l => l.id !== entry.id)) },
+        ]);
     };
 
     const handleSave = (label: string, url: string) => {
@@ -562,60 +279,52 @@ const AddLink = ({
     }
 
     return (
-        <View style={mainStyles.wrapper}>
-            {/* Section header */}
-            <View style={mainStyles.sectionHeader}>
-                <View style={mainStyles.sectionTitleRow}>
-                    <Ionicons name="link" size={16} color={PURPLE} />
-                    <Text style={mainStyles.sectionTitle}>{sectionTitle}</Text>
-                    {(!readonly) && (
-                        <Text style={mainStyles.sectionCount}>{links.length}/{maxLinks}</Text>
-                    )}
-                </View>
-
-                {!atMax && !readonly && (
-                    <RippleButton
-                        onPress={openAdd}
-                        borderless
-                        style={mainStyles.addBtn}
-                        rippleColor="rgba(103,51,208,0.22)"
-                        accessibilityLabel="Add link"
-                    >
-                        <Ionicons name="add-circle" size={22} color={PURPLE} />
-                    </RippleButton>
-                )}
+        <View style={s.wrapper}>
+            <View style={s.header}>
+                <Text style={s.title} accessibilityRole="header">{sectionTitle}</Text>
+                {!readonly && <Text style={s.count}>{links.length}/{maxLinks}</Text>}
             </View>
 
-            {/* Links list */}
             {links.length > 0 ? (
-                <View style={mainStyles.card}>
+                <ListSection style={s.section} iconRows>
                     {links.map((entry) => (
                         <LinkRow
                             key={entry.id}
                             entry={entry}
                             onEdit={() => openEdit(entry)}
-                            onDelete={() => handleDelete(entry.id)}
+                            onDelete={() => handleDelete(entry)}
                             readonly={readonly}
                         />
                     ))}
-                </View>
+                    {!readonly && !atMax && (
+                        <PressableScale onPress={openAdd} scaleTo={1} style={s.addRow} pressedStyle={s.rowPressed} accessibilityRole="button" accessibilityLabel="Add link">
+                            <View style={s.iconTile}>
+                                <Ionicons name="add" size={20} color={colors.tintText} />
+                            </View>
+                            <Text style={s.addText}>Add link</Text>
+                        </PressableScale>
+                    )}
+                </ListSection>
             ) : (
                 /* Empty state */
-                <RippleButton
+                <PressableScale
                     onPress={openAdd}
-                    style={mainStyles.emptyCard}
-                    rippleColor="rgba(103,51,208,0.10)"
+                    style={s.emptyCard}
+                    pressedStyle={s.rowPressed}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add a link to your profile"
                 >
-                    <Ionicons name="link-outline" size={28} color={PURPLE_LIGHT.replace('ede6ff', 'b8a0e8')} />
-                    <View style={{ gap: 2 }}>
-                        <Text style={mainStyles.emptyTitle}>Add a link to your profile</Text>
-                        <Text style={mainStyles.emptySubtitle}>Portfolio, social, or any URL</Text>
+                    <View style={s.iconTile}>
+                        <Ionicons name="link-outline" size={18} color={colors.tintText} />
                     </View>
-                    <Ionicons name="add-circle-outline" size={20} color={PURPLE} />
-                </RippleButton>
+                    <View style={s.rowText}>
+                        <Text style={s.rowLabel}>Add a link to your profile</Text>
+                        <Text style={s.emptySub}>Portfolio, social, or any URL</Text>
+                    </View>
+                    <Ionicons name="add-circle" size={22} color={colors.tintText} />
+                </PressableScale>
             )}
 
-            {/* Add/Edit sheet */}
             <AddEditSheet
                 visible={sheetVisible}
                 editing={editingEntry}
@@ -626,80 +335,105 @@ const AddLink = ({
     );
 };
 
-const mainStyles = StyleSheet.create({
+const useStyles = makeStyles((t) => ({
     wrapper: {
-        gap: 8,
+        gap: t.space.sm,
     },
-    sectionHeader: {
+    header: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'baseline',
         justifyContent: 'space-between',
-        paddingHorizontal: 4,
+        marginHorizontal: t.space.gutter + t.space.lg,
     },
-    sectionTitleRow: {
+    title: {
+        ...t.type.footnote,
+        fontWeight: '600',
+        color: t.colors.secondaryLabel,
+    },
+    count: {
+        ...t.type.caption1,
+        color: t.colors.secondaryLabel,
+        fontVariant: ['tabular-nums'],
+    },
+    section: {
+        marginHorizontal: t.space.gutter,
+    },
+    row: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        backgroundColor: t.colors.surface,
     },
-    sectionTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: INK_MUTED,
-        letterSpacing: 0.7,
-        textTransform: 'uppercase',
+    rowMain: {
+        flex: 1,
+        minHeight: 56,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: t.space.md,
+        paddingLeft: t.space.lg,
+        paddingRight: t.space.sm,
+        paddingVertical: t.space.sm,
     },
-    sectionCount: {
-        fontSize: 11,
-        color: INK_MUTED,
-        fontWeight: '500',
+    rowPressed: {
+        backgroundColor: t.colors.pressedOverlay,
     },
-    addBtn: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
+    rowActions: {
+        flexDirection: 'row',
+        paddingRight: t.space.xs,
+    },
+    iconTile: {
+        width: 32,
+        height: 32,
+        borderRadius: 9,
+        backgroundColor: t.colors.tintSoft,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    card: {
-        backgroundColor: WHITE,
-        borderRadius: 18,
-        overflow: 'hidden',
-        ...Platform.select({
-            ios: {
-                shadowColor: SHADOW,
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 1,
-                shadowRadius: 10,
-            },
-            android: { elevation: 3 },
-        }),
+    rowText: {
+        flex: 1,
+        minWidth: 0,
+        gap: 1,
     },
-    emptyCard: {
+    rowLabel: {
+        ...t.type.callout,
+        fontWeight: '600',
+        color: t.colors.label,
+    },
+    rowUrl: {
+        ...t.type.footnote,
+        color: t.colors.tintText,
+    },
+    addRow: {
+        minHeight: 52,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        backgroundColor: PURPLE_XLIGHT,
-        borderRadius: 16,
-        borderWidth: 1.5,
+        gap: t.space.md,
+        paddingHorizontal: t.space.lg,
+        backgroundColor: t.colors.surface,
+    },
+    addText: {
+        ...t.type.body,
+        color: t.colors.tintText,
+    },
+    emptyCard: {
+        marginHorizontal: t.space.gutter,
+        minHeight: 64,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: t.space.md,
+        paddingHorizontal: t.space.lg,
+        borderRadius: t.radius.lg,
+        backgroundColor: t.colors.surface,
+        borderWidth: 1,
         borderStyle: 'dashed',
-        borderColor: PURPLE_LIGHT,
-        paddingVertical: 16,
-        paddingHorizontal: 16,
-        overflow: 'hidden',
+        borderColor: t.colors.fillStrong,
     },
-    emptyTitle: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: INK,
+    emptySub: {
+        ...t.type.footnote,
+        color: t.colors.secondaryLabel,
     },
-    emptySubtitle: {
-        fontSize: 12,
-        color: INK_MUTED,
-    },
-});
+}));
 
-// Names for memo-wrapped components in React DevTools and error messages.
 LinkRow.displayName = 'LinkRow';
 AddEditSheet.displayName = 'AddEditSheet';
 
-export default memo(AddLink);
+export default AddLink;

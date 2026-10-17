@@ -1,71 +1,43 @@
 /**
- * MessageBubble.tsx — Reusable chat message component
+ * MessageBubble.tsx: one chat message.
  *
- * Displays individual messages with:
- * - Sender identification (me/other)
- * - Message content with text wrapping
- * - Timestamp display
- * - Status indicators (extensible for read receipts, reactions)
- *
- * Designed for easy scaling with:
- * - Props for future media/attachments
- * - Status indicators (sent/delivered/read)
- * - Reaction support
- * - Context menu actions
+ * Consecutive messages from the same person within a few minutes form a group:
+ * they sit closer together, only the last one carries the tail corner, and only
+ * the last one shows the time and delivery status. Failed messages always show
+ * their status so the retry is never hidden.
  */
 
+import { makeStyles, useTheme } from '@/src/theme';
+import { Ionicons } from '@expo/vector-icons';
 import React, { memo } from 'react';
-import { Pressable, StyleSheet, Text, TextStyle, View, ViewStyle } from 'react-native';
+import { Pressable, Text, View, type TextStyle, type ViewStyle } from 'react-native';
+import Animated, { FadeInDown, ReduceMotion } from 'react-native-reanimated';
 
 /* ─────────────────────── Types ─────────────────────── */
 
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface MessageBubbleProps {
-    /**
-     * Unique message identifier (ObjectId or timestamp-based)
-     */
+    /** Unique message identifier */
     id: string;
-
-    /**
-     * Message text content
-     */
+    /** Message text content */
     text: string;
-
-    /**
-     * Sender perspective: 'me' for current user, 'other' for peer
-     */
+    /** Sender perspective: 'me' for current user, 'other' for peer */
     sender: 'me' | 'other';
-
-    /**
-     * ISO timestamp when message was created
-     */
+    /** ISO timestamp when message was created */
     createdAt: string;
-
-    /**
-     * Optional: Message delivery/read status
-     * @default 'sent'
-     */
+    /** Delivery/read status (outgoing messages) */
     status?: MessageStatus;
-
-    /**
-     * Optional: Username of sender (for group chats, future feature)
-     */
+    /** Username of sender (for group chats, future feature) */
     senderName?: string;
-
-    /**
-     * Optional: Callback when message is pressed (for context menu, future)
-     */
+    /** First message of a run from the same sender (visually the top one). */
+    isFirstInGroup?: boolean;
+    /** Last message of a run (visually the bottom one): gets the tail and the time. */
+    isLastInGroup?: boolean;
+    /** Animate in: true only for messages that arrive while the chat is open. */
+    animateIn?: boolean;
     onPress?: () => void;
-
-    /**
-     * Optional: Callback for long press (reactions, forwarding, etc.)
-     */
     onLongPress?: () => void;
-
-    /**
-     * Optional: Custom styles override
-     */
     containerStyle?: ViewStyle;
     bubbleStyle?: ViewStyle;
     textStyle?: TextStyle;
@@ -73,129 +45,110 @@ export interface MessageBubbleProps {
 
 /* ─────────────────────── Helpers ─────────────────────── */
 
-/**
- * Format ISO timestamp to 12-hour time with AM/PM
- * @example "2:45 PM"
- */
+/** "2:45 PM" */
 function formatTime(iso: string): string {
     const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-/**
- * Get status indicator symbol
- * - ✓ = sent
- * - ✓✓ = delivered
- * - ✓✓ (blue) = read
- */
-function getStatusIcon(status?: MessageStatus): string {
-    switch (status) {
-        case 'read':
-            return '✓✓';
-        case 'delivered':
-            return '✓✓';
-        case 'failed':
-            return '!';
-        case 'sent':
-        case 'sending':
-        default:
-            return '✓';
-    }
-}
+const STATUS_LABEL: Record<MessageStatus, string> = {
+    sending: 'Sending',
+    sent: 'Sent',
+    delivered: 'Delivered',
+    read: 'Read',
+    failed: 'Not sent',
+};
+
+// Messages rise into place from just below. The list is inverted, so the
+// visual "from below" is FadeInDown inside the flipped cell.
+const ENTER = FadeInDown.duration(220)
+    .withInitialValues({ opacity: 0, transform: [{ translateY: -8 }] })
+    .reduceMotion(ReduceMotion.System);
 
 /* ─────────────────────── Component ─────────────────────── */
 
-/**
- * MessageBubble — Scalable message display component
- *
- * Usage:
- * ```
- * <MessageBubble
- *   id="msg123"
- *   text="Hello!"
- *   sender="me"
- *   createdAt={new Date().toISOString()}
- *   status="read"
- *   onLongPress={() => showContextMenu()}
- * />
- * ```
- */
 const MessageBubble = memo<MessageBubbleProps>(
     ({
-        id,
         text,
         sender,
         createdAt,
         status = 'sent',
         senderName,
+        isFirstInGroup = true,
+        isLastInGroup = true,
+        animateIn = false,
         onPress,
         onLongPress,
         containerStyle,
         bubbleStyle,
         textStyle,
     }) => {
+        const s = useStyles();
+        const { colors } = useTheme();
         const isMe = sender === 'me';
+        const failed = isMe && status === 'failed';
+        const showMeta = isLastInGroup || failed;
+
+        const statusIcon: keyof typeof Ionicons.glyphMap | null = !isMe
+            ? null
+            : status === 'failed'
+                ? 'alert-circle'
+                : status === 'read' || status === 'delivered'
+                    ? 'checkmark-done'
+                    : status === 'sending'
+                        ? 'time-outline'
+                        : 'checkmark';
 
         return (
-            <View style={styles.bubbleRowContainer}>
-                <View
-                    style={[
-                        styles.bubbleRow,
-                        isMe ? styles.bubbleRowMe : styles.bubbleRowOther,
-                        containerStyle,
-                    ]}
-                    accessibilityRole="text"
-                    accessibilityLabel={`Message from ${isMe ? 'you' : senderName || 'contact'}: ${text}`}
-                >
-                {/* Sender name for group chats (future feature) */}
-                {senderName && !isMe && (
-                    <Text style={styles.senderName} numberOfLines={1}>
-                        {senderName}
-                    </Text>
-                )}
-
-                {/* Message bubble */}
-                <Pressable
-                    style={[
-                        styles.bubble,
-                        isMe ? styles.bubbleMe : styles.bubbleOther,
-                        bubbleStyle,
-                    ]}
-                    onPress={onPress}
-                    onLongPress={onLongPress}
-                >
-                    <Text
-                        style={[
-                            styles.bubbleText,
-                            isMe ? styles.bubbleTextMe : styles.bubbleTextOther,
-                            textStyle,
-                        ]}
-                    >
-                        {text}
-                    </Text>
-                </Pressable>
-
-                {/* Timestamp + Status */}
-                <View style={[styles.bottomRow, isMe ? styles.bottomRowMe : styles.bottomRowOther]}>
-                    <Text style={[styles.timestamp, status === 'failed' && isMe && styles.failedText]}>
-                        {status === 'failed' && isMe ? 'Not sent · tap to retry' : formatTime(createdAt)}
-                    </Text>
-
-                    {/* Status indicator (visible for sent messages) */}
-                    {isMe && (
-                        <Text
-                            style={[
-                                styles.statusIcon,
-                                status === 'read' && styles.statusIconRead,
-                                status === 'failed' && styles.failedText,
-                            ]}
-                        >
-                            {getStatusIcon(status)}
+            <Animated.View entering={animateIn ? ENTER : undefined} style={[s.row, isLastInGroup ? s.rowGroupEnd : s.rowGrouped]}>
+                <View style={[s.column, isMe ? s.columnMe : s.columnOther, containerStyle]}>
+                    {/* Sender name for group chats (future feature) */}
+                    {senderName && !isMe && isFirstInGroup && (
+                        <Text style={s.senderName} numberOfLines={1}>
+                            {senderName}
                         </Text>
                     )}
+
+                    <Pressable
+                        onPress={onPress}
+                        onLongPress={onLongPress}
+                        accessibilityRole={onPress ? 'button' : 'text'}
+                        accessibilityLabel={`${isMe ? 'You' : senderName || 'Contact'}: ${text}. ${formatTime(createdAt)}${isMe ? `, ${STATUS_LABEL[status]}` : ''}`}
+                        accessibilityHint={failed ? 'Double tap to retry or delete' : undefined}
+                        style={[
+                            s.bubble,
+                            isMe ? s.bubbleMe : s.bubbleOther,
+                            isLastInGroup && (isMe ? s.tailMe : s.tailOther),
+                            failed && s.bubbleFailed,
+                            bubbleStyle,
+                        ]}
+                    >
+                        <Text style={[s.text, isMe ? s.textMe : s.textOther, textStyle]} selectable>
+                            {text}
+                        </Text>
+                    </Pressable>
+
+                    {showMeta && (
+                        <View
+                            style={[s.meta, isMe ? s.metaMe : s.metaOther]}
+                            accessibilityElementsHidden
+                            importantForAccessibility="no-hide-descendants"
+                        >
+                            <Text style={[s.time, failed && s.failedText]}>
+                                {failed ? 'Not sent · tap to retry' : formatTime(createdAt)}
+                            </Text>
+                            {statusIcon && !failed && (
+                                <Ionicons
+                                    name={statusIcon}
+                                    size={14}
+                                    color={status === 'read' ? colors.tintText : colors.secondaryLabel}
+                                />
+                            )}
+                            {failed && <Ionicons name="alert-circle" size={14} color={colors.danger} />}
+                        </View>
+                    )}
                 </View>
-                </View>
-            </View>
+            </Animated.View>
         );
     }
 );
@@ -204,113 +157,94 @@ MessageBubble.displayName = 'MessageBubble';
 
 /* ─────────────────────── Styles ─────────────────────── */
 
-const styles = StyleSheet.create({
-    /* Layout */
-    bubbleRowContainer: {
+const useStyles = makeStyles((t) => ({
+    row: {
         width: '100%',
-        flexDirection: 'column',
     },
-    bubbleRow: {
-        marginBottom: 8,
-        maxWidth: '85%',
+    rowGrouped: {
+        marginTop: 2,
     },
-
-    bubbleRowMe: {
+    rowGroupEnd: {
+        marginTop: 2,
+        marginBottom: t.space.sm,
+    },
+    column: {
+        maxWidth: '80%',
+    },
+    columnMe: {
         alignSelf: 'flex-end',
         alignItems: 'flex-end',
     },
-
-    bubbleRowOther: {
+    columnOther: {
         alignSelf: 'flex-start',
         alignItems: 'flex-start',
     },
-
-    /* Bubble container */
     bubble: {
-        paddingVertical: 10,
+        paddingVertical: 9,
         paddingHorizontal: 14,
-        borderRadius: 20,
-        minHeight: 40,
+        borderRadius: t.radius.xl,
+        minHeight: 38,
         justifyContent: 'center',
     },
-
     bubbleMe: {
-        backgroundColor: '#6733d0',
-        borderBottomRightRadius: 4, // WhatsApp-style notch
+        backgroundColor: t.colors.bubbleMe,
     },
-
     bubbleOther: {
-        backgroundColor: '#fff',
-        borderWidth: 0.5,
-        borderColor: '#ede6ff',
-        borderBottomLeftRadius: 4, // tail on left
+        backgroundColor: t.colors.bubbleOther,
+        borderWidth: t.size.hairline,
+        borderColor: t.colors.bubbleOtherBorder,
     },
-
-    /* Text styling */
-    bubbleText: {
-        fontSize: 15,
-        lineHeight: 21,
-        fontFamily: 'System',
+    tailMe: {
+        borderBottomRightRadius: t.radius.xs,
     },
-
-    bubbleTextMe: {
-        color: '#fff',
+    tailOther: {
+        borderBottomLeftRadius: t.radius.xs,
     },
-
-    bubbleTextOther: {
-        color: '#1a1a2e',
+    bubbleFailed: {
+        opacity: 0.75,
     },
-
-    /* Group chat sender name */
+    text: {
+        ...t.type.callout,
+        lineHeight: 22,
+    },
+    textMe: {
+        color: t.colors.bubbleMeText,
+    },
+    textOther: {
+        color: t.colors.bubbleOtherText,
+    },
     senderName: {
-        fontSize: 12,
+        ...t.type.caption1,
         fontWeight: '600',
-        color: '#6733d0',
-        marginBottom: 4,
-        marginLeft: 4,
+        color: t.colors.tintText,
+        marginBottom: t.space.xs,
+        marginLeft: t.space.md,
         maxWidth: '90%',
     },
-
-    /* Timestamp + Status row */
-    bottomRow: {
+    meta: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: 3,
         marginTop: 3,
     },
-
-    bottomRowMe: {
+    metaMe: {
         justifyContent: 'flex-end',
-        marginRight: 4,
+        marginRight: t.space.xs,
     },
-
-    bottomRowOther: {
+    metaOther: {
         justifyContent: 'flex-start',
-        marginLeft: 4,
+        marginLeft: t.space.xs,
     },
-
-    /* Timestamp */
-    timestamp: {
-        fontSize: 10,
-        color: '#7b7b9d',
-        fontFamily: 'System',
+    time: {
+        ...t.type.caption2,
+        fontWeight: '400',
+        color: t.colors.secondaryLabel,
+        fontVariant: ['tabular-nums'],
     },
-
-    /* Status indicator */
-    statusIcon: {
-        fontSize: 10,
-        color: '#999',
-        marginLeft: 2,
+    failedText: {
+        color: t.colors.danger,
         fontWeight: '600',
     },
-
-    statusIconRead: {
-        color: '#6733d0', // Blue check for read
-    },
-
-    failedText: {
-        color: '#ef4444',
-    },
-});
+}));
 
 export default MessageBubble;

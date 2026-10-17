@@ -1,16 +1,19 @@
 import AvatarPicker from '@/app/components/AvatarPicker';
+import { Button, EmptyState, NavBar, useNavBarHeight, useScrollEdge } from '@/app/components/ui';
 import { getAuthErrorMessage, getBlockedUsers, unblockUser, type BlockedUserDto } from '@/services/AuthService';
-import { Ionicons } from '@expo/vector-icons';
+import { makeStyles, useTheme } from '@/src/theme';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-const PURPLE = '#6733d0';
-const INK = '#1a1a2e';
-const MUTED = '#6b7280';
+import { ActivityIndicator, Alert, Text, View } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /** Accounts the user has blocked, with Unblock. Opened from Settings. */
 const BlockedUsers = ({ navigation }: { navigation: any }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
+    const insets = useSafeAreaInsets();
+    const navHeight = useNavBarHeight();
+    const { scrollY, onScroll } = useScrollEdge();
     const [users, setUsers] = useState<BlockedUserDto[]>([]);
     const [loading, setLoading] = useState(true);
     const [unblockingId, setUnblockingId] = useState<string | null>(null);
@@ -44,77 +47,78 @@ const BlockedUsers = ({ navigation }: { navigation: any }) => {
     };
 
     return (
-        <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-            <View style={styles.header}>
-                <Pressable onPress={() => navigation.goBack()} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back">
-                    <Ionicons name="arrow-back" size={22} color={INK} />
-                </Pressable>
-                <Text style={styles.title}>Blocked accounts</Text>
-                <View style={{ width: 22 }} />
-            </View>
-
+        <View style={s.screen}>
             {loading ? (
-                <ActivityIndicator style={{ marginTop: 32 }} color={PURPLE} />
+                <View style={[s.center, { paddingTop: navHeight }]}>
+                    <ActivityIndicator color={colors.tintText} accessibilityLabel="Loading blocked accounts" />
+                </View>
             ) : (
-                <FlatList
+                <Animated.FlatList
                     data={users}
                     keyExtractor={(u) => u.id}
-                    contentContainerStyle={users.length === 0 ? styles.emptyContent : undefined}
-                    ListEmptyComponent={
-                        <Text style={styles.empty}>You haven&apos;t blocked anyone.</Text>
+                    onScroll={onScroll}
+                    scrollEventThrottle={16}
+                    contentContainerStyle={[
+                        { paddingTop: navHeight + 8, paddingBottom: Math.max(insets.bottom, 16) + 24 },
+                        users.length === 0 && s.emptyContent,
+                    ]}
+                    ListHeaderComponent={
+                        users.length > 0 ? (
+                            <Text style={s.caption}>Blocked people can&apos;t follow or message you.</Text>
+                        ) : null
                     }
-                    renderItem={({ item }) => (
-                        <View style={styles.row}>
+                    ListEmptyComponent={<EmptyState icon="hand-left-outline" title="You haven't blocked anyone." />}
+                    renderItem={({ item, index }) => (
+                        <View style={[s.row, index === 0 && s.rowFirst, index === users.length - 1 && s.rowLast]}>
                             <AvatarPicker uri={item.profilePicture} name={item.username} size={44} />
-                            <Text style={styles.name} numberOfLines={1}>{item.username}</Text>
-                            <Pressable
+                            <Text style={s.name} numberOfLines={1}>{item.username}</Text>
+                            <Button
+                                title="Unblock"
+                                variant="tinted"
+                                size="sm"
                                 onPress={() => void unblock(item)}
-                                disabled={!!unblockingId}
-                                style={({ pressed }) => [styles.unblock, pressed && { opacity: 0.7 }]}
-                                accessibilityRole="button"
+                                disabled={!!unblockingId && unblockingId !== item.id}
+                                loading={unblockingId === item.id}
                                 accessibilityLabel={`Unblock ${item.username}`}
-                            >
-                                {unblockingId === item.id ? (
-                                    <ActivityIndicator size="small" color={PURPLE} />
-                                ) : (
-                                    <Text style={styles.unblockText}>Unblock</Text>
-                                )}
-                            </Pressable>
+                            />
+                        </View>
+                    )}
+                    ItemSeparatorComponent={() => (
+                        <View style={s.separatorWrap}>
+                            <View style={s.separator} />
                         </View>
                     )}
                 />
             )}
-        </SafeAreaView>
+            <NavBar title="Blocked accounts" onBack={() => navigation.goBack()} scrollY={scrollY} />
+        </View>
     );
 };
 
-const styles = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: '#fff' },
-    header: {
-        height: 56,
-        paddingHorizontal: 16,
+const useStyles = makeStyles((t) => ({
+    screen: { flex: 1, backgroundColor: t.colors.ground },
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    emptyContent: { flexGrow: 1, justifyContent: 'center' },
+    caption: {
+        ...t.type.footnote,
+        color: t.colors.secondaryLabel,
+        marginHorizontal: t.space.gutter + t.space.lg,
+        marginBottom: t.space.sm,
+    },
+    row: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottomWidth: 1,
-        borderBottomColor: '#f3f4f6',
+        gap: t.space.md,
+        marginHorizontal: t.space.gutter,
+        paddingHorizontal: t.space.lg,
+        paddingVertical: t.space.md,
+        backgroundColor: t.colors.surface,
     },
-    title: { fontSize: 18, fontWeight: '700', color: INK },
-    row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 12 },
-    name: { flex: 1, fontSize: 16, color: INK },
-    unblock: {
-        minWidth: 88,
-        height: 34,
-        borderRadius: 17,
-        borderWidth: 1,
-        borderColor: PURPLE,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 12,
-    },
-    unblockText: { color: PURPLE, fontWeight: '600' },
-    emptyContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
-    empty: { color: MUTED, fontSize: 15 },
-});
+    rowFirst: { borderTopLeftRadius: t.radius.lg, borderTopRightRadius: t.radius.lg },
+    rowLast: { borderBottomLeftRadius: t.radius.lg, borderBottomRightRadius: t.radius.lg },
+    name: { flex: 1, ...t.type.body, color: t.colors.label },
+    separatorWrap: { marginHorizontal: t.space.gutter, backgroundColor: t.colors.surface },
+    separator: { height: t.size.hairline, backgroundColor: t.colors.separator, marginLeft: t.space.lg + 44 + t.space.md },
+}));
 
 export default BlockedUsers;

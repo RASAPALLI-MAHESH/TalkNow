@@ -1,8 +1,10 @@
+import { Button } from '@/app/components/ui';
 import { getMinAppVersion } from '@/services/AuthService';
+import { makeStyles, useTheme } from '@/src/theme';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 const APP_VERSION = String(Constants.expoConfig?.version ?? '0.0.0');
 
@@ -33,28 +35,47 @@ export const useUpdateRequired = () => {
     return { required, check };
 };
 
-const UpdateRequired = ({ onRetry }: { onRetry: () => void }) => (
-    <View style={styles.container}>
-        <Ionicons name="cloud-download-outline" size={48} color="#6733d0" />
-        <Text style={styles.title}>Update TalkNow</Text>
-        <Text style={styles.body}>
-            This version of TalkNow is no longer supported. Install the latest version from the App Store or Google Play
-            to keep chatting. Your messages are end-to-end encrypted in the new version.
-        </Text>
-        <Pressable style={styles.button} onPress={onRetry} accessibilityRole="button">
-            <Text style={styles.buttonText}>I&apos;ve updated</Text>
-        </Pressable>
-        <Text style={styles.version}>Installed version {APP_VERSION}</Text>
-    </View>
-);
+const UpdateRequired = ({ onRetry }: { onRetry: () => void }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
+    return (
+        <View style={s.container}>
+            <View style={s.iconTile}>
+                <Ionicons name="cloud-download-outline" size={36} color={colors.tintText} />
+            </View>
+            <Text style={s.title} accessibilityRole="header">Update TalkNow</Text>
+            <Text style={s.body}>
+                This version of TalkNow is no longer supported. Install the latest version from the App Store or Google Play
+                to keep chatting. Your messages are end-to-end encrypted in the new version.
+            </Text>
+            <Button title="I've updated" onPress={onRetry} style={s.button} />
+            <Text style={s.version}>Installed version {APP_VERSION}</Text>
+        </View>
+    );
+};
 
-const styles = StyleSheet.create({
-    container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16, backgroundColor: '#f8f5ff' },
-    title: { fontSize: 22, fontWeight: '700', color: '#1a1a2e' },
-    body: { fontSize: 15, lineHeight: 22, color: '#7b7b9d', textAlign: 'center' },
-    button: { backgroundColor: '#6733d0', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
-    buttonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-    version: { fontSize: 12, color: '#7b7b9d' },
-});
+const useStyles = makeStyles((t) => ({
+    container: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: t.space.xxxl,
+        gap: t.space.lg,
+        backgroundColor: t.colors.ground,
+    },
+    iconTile: {
+        width: 80,
+        height: 80,
+        borderRadius: 24,
+        backgroundColor: t.colors.tintSoft,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: t.space.sm,
+    },
+    title: { ...t.type.title2, color: t.colors.label },
+    body: { ...t.type.subhead, lineHeight: 22, color: t.colors.secondaryLabel, textAlign: 'center', maxWidth: 360 },
+    button: { marginTop: t.space.sm, alignSelf: 'stretch', maxWidth: 360, width: '100%' },
+    version: { ...t.type.caption1, color: t.colors.secondaryLabel },
+}));
 
 export default UpdateRequired;

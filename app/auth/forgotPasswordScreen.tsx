@@ -1,27 +1,16 @@
+import { Button, TextField } from '@/app/components/ui';
 import useAuth from '@/hooks/useAuth';
 import { getAuthErrorMessage } from '@/services/AuthService';
 import React, { useState } from 'react';
-import {
-    ActivityIndicator,
-    Alert,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { authStyles, AUTH_COLORS } from './authStyles';
+import { Alert } from 'react-native';
+import AuthScaffold, { AuthFooterLink } from './AuthScaffold';
 
 const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
     const { forgotPassword } = useAuth();
     const [email, setEmail] = useState("");
     const [loading, setLoading] = useState(false);
-    
+    const [touched, setTouched] = useState(false);
+
     // Check if the input resembles an email
     const trimmedEmail = email.trim();
     const isValidEmail = /^\S+@\S+\.\S+$/.test(trimmedEmail);
@@ -41,59 +30,33 @@ const ForgotPasswordScreen = ({navigation}: {navigation: any}) => {
     };
 
     return (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <KeyboardAvoidingView
-                style={authStyles.screen}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                    <View style={authStyles.iconWrap}>
-                        <Ionicons name="key-outline" size={26} color="#710b8d" />
-                    </View>
-                    <Text style={authStyles.title}>Forgot Password</Text>
-                    <Text style={authStyles.subtitle}>Enter your email to receive a reset code.</Text>
-
-                    <Text style={authStyles.label}>Email</Text>
-                    <TextInput
-                        placeholder="talknow@example.com"
-                        placeholderTextColor={AUTH_COLORS.placeholder}
-                        style={authStyles.input}
-                        value={email}
-                        onChangeText={setEmail}
-                        keyboardType="email-address"
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        returnKeyType="done"
-                        onSubmitEditing={() => {
-                            if (!loading && isValidEmail) void handleSendOTP();
-                        }}
-                    />
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            authStyles.button,
-                            pressed && authStyles.buttonPressed,
-                            (!isValidEmail || loading) && authStyles.buttonDisabled
-                        ]}
-                        onPress={handleSendOTP}
-                        disabled={!isValidEmail || loading}
-                    >
-                        {loading ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={authStyles.buttonText}>Send OTP</Text>
-                        )}
-                    </Pressable>
-
-                    <View style={authStyles.bottomTextContainer}>
-                        <Text style={authStyles.bottomText}>
-                            Remembered it?{' '}
-                            <Text style={authStyles.link} onPress={() => navigation.navigate('Login')}>Back to Login</Text>
-                        </Text>
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </TouchableWithoutFeedback>
+        <AuthScaffold
+            icon="key-outline"
+            title="Forgot Password"
+            subtitle="Enter your email to receive a reset code."
+            onBack={() => navigation.goBack()}
+            footer={<AuthFooterLink prompt="Remembered it?" action="Back to Login" onPress={() => navigation.navigate('Login')} />}
+        >
+            <TextField
+                label="Email"
+                placeholder="talknow@example.com"
+                value={email}
+                onChangeText={setEmail}
+                onBlur={() => setTouched(true)}
+                error={touched && trimmedEmail.length > 0 && !isValidEmail ? "Enter a valid email address." : undefined}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                textContentType="emailAddress"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                    if (!loading && isValidEmail) void handleSendOTP();
+                }}
+                testID="forgot-email"
+            />
+            <Button title="Send OTP" onPress={handleSendOTP} loading={loading} disabled={!isValidEmail} testID="forgot-submit" />
+        </AuthScaffold>
     )
 };
 export default ForgotPasswordScreen;

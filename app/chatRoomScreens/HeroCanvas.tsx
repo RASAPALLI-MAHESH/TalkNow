@@ -1,25 +1,27 @@
 /**
  * HeroCanvas.tsx
  *
- * An immersive, rich editor for the profile Hero Description Card.
- * Feels like Instagram/WhatsApp status editor.
+ * Full-screen editor for the profile Hero card: text on a colour theme or on a
+ * photo. Presented modally with Cancel and Done. The canvas always renders
+ * dark, like a photo editor, whatever the system appearance.
  */
 
-import RippleButton from '@/app/components/RippleButton';
+import { GlassSurface, PressableScale, haptics } from '@/app/components/ui';
+import { palette } from '@/src/theme';
 import useAuth from '@/hooks/useAuth';
 import { getAuthErrorMessage, updateProfile } from '@/services/AuthService';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { StatusBar } from 'expo-status-bar';
 import React, { memo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
-    Dimensions,
     KeyboardAvoidingView,
     Platform,
     ScrollView,
-    StatusBar,
     StyleSheet,
     Text,
     TextInput,
@@ -34,7 +36,8 @@ export type HeroTheme = {
     textColor: string;
 };
 
-const THEMES: HeroTheme[] = [
+// User-chosen content colours for the Hero card (not app chrome). Stored by id on the profile.
+export const HERO_THEMES: HeroTheme[] = [
     { id: 't1', label: 'Classic Purple', colors: ['#6733d0', '#4c1f9e'], textColor: '#ffffff' },
     { id: 't2', label: 'Ocean Blue', colors: ['#2b5876', '#4e4376'], textColor: '#ffffff' },
     { id: 't3', label: 'Sunset Orange', colors: ['#ff7e5f', '#feb47b'], textColor: '#ffffff' },
@@ -43,13 +46,14 @@ const THEMES: HeroTheme[] = [
     { id: 't6', label: 'Soft Pink', colors: ['#fecfef', '#ff9a9e'], textColor: '#1a1a2e' },
 ];
 
+/** The theme for a stored id; unknown ids fall back to Classic Purple. */
+export const heroThemeFor = (id?: string) => HERO_THEMES.find((t) => t.id === id) ?? HERO_THEMES[0];
+
 export interface HeroData {
     text: string;
     themeId: string;
     customImageUri?: string;
 }
-
-const { width: W, height: H } = Dimensions.get('window');
 
 const HeroCanvas = ({ navigation, route }: any) => {
     const initialData: HeroData = route?.params?.initialData || {
@@ -64,7 +68,7 @@ const HeroCanvas = ({ navigation, route }: any) => {
     const [customImageUri, setCustomImageUri] = useState<string | undefined>(initialData.customImageUri);
     const [isPickingImage, setIsPickingImage] = useState(false);
 
-    const activeTheme = THEMES.find(t => t.id === selectedThemeId) || THEMES[0];
+    const activeTheme = heroThemeFor(selectedThemeId);
 
     const handlePickImage = async () => {
         setIsPickingImage(true);
@@ -76,7 +80,7 @@ const HeroCanvas = ({ navigation, route }: any) => {
             }
 
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                mediaTypes: ['images'],
                 allowsEditing: true,
                 aspect: [4, 5], // Story-ish ratio
                 quality: 0.6,
@@ -107,6 +111,7 @@ const HeroCanvas = ({ navigation, route }: any) => {
             });
             // The server returns the stored image URL in place of the picked image data.
             if (response?.user?.heroData) updateUser({ heroData: response.user.heroData });
+            haptics.success();
             navigation.goBack();
         } catch (err) {
             Alert.alert('Could not save', getAuthErrorMessage(err, 'Please try again.'));
@@ -119,34 +124,37 @@ const HeroCanvas = ({ navigation, route }: any) => {
 
     return (
         <SafeAreaView style={S.safe} edges={['top', 'bottom']}>
-            <StatusBar barStyle="light-content" backgroundColor="#000" />
-            
+            <StatusBar style="light" />
+
             {/* Header */}
             <View style={S.header}>
-                <RippleButton onPress={() => navigation.goBack()} borderless style={S.headerBtn}>
-                    <Ionicons name="close" size={28} color="#fff" />
-                </RippleButton>
-                <RippleButton onPress={handleSave} disabled={saving} style={S.doneBtn}>
-                    {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={S.doneText}>Done</Text>}
-                </RippleButton>
+                <PressableScale onPress={() => navigation.goBack()} style={S.headerBtn} accessibilityRole="button" accessibilityLabel="Cancel">
+                    <Text style={S.cancelText}>Cancel</Text>
+                </PressableScale>
+                <Text style={S.headerTitle}>Hero Card</Text>
+                <PressableScale onPress={handleSave} disabled={saving} style={S.doneBtn} accessibilityRole="button" accessibilityLabel="Done">
+                    {saving ? <ActivityIndicator size="small" color="#ffffff" /> : <Text style={S.doneText}>Done</Text>}
+                </PressableScale>
             </View>
 
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                
+
                 {/* Canvas Area */}
                 <View style={S.canvasWrapper}>
-                    <View style={[
-                        S.canvasCard,
-                        !customImageUri && { backgroundColor: activeTheme.colors[0] }
-                    ]}>
-                        
-                        {/* Background Image if selected */}
-                        {customImageUri && (
+                    <View style={S.canvasCard}>
+                        {customImageUri ? (
                             <>
                                 <ExpoImage source={{ uri: customImageUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
                                 {/* Overlay to ensure text readability */}
                                 <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
                             </>
+                        ) : (
+                            <LinearGradient
+                                colors={activeTheme.colors}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={StyleSheet.absoluteFillObject}
+                            />
                         )}
 
                         <TextInput
@@ -155,16 +163,19 @@ const HeroCanvas = ({ navigation, route }: any) => {
                             value={text}
                             onChangeText={setText}
                             placeholder="Type something amazing..."
-                            placeholderTextColor={textColor + '80'} // 50% opacity
+                            placeholderTextColor={textColor + '99'}
                             selectionColor={textColor}
                             autoFocus
+                            accessibilityLabel="Hero card text"
                         />
 
                         {/* Remove Image button */}
                         {customImageUri && (
-                            <RippleButton onPress={handleRemoveImage} style={S.removeImageBtn}>
-                                <Ionicons name="trash-outline" size={16} color="#fff" />
-                            </RippleButton>
+                            <PressableScale onPress={handleRemoveImage} style={S.removeImageBtn} accessibilityRole="button" accessibilityLabel="Remove photo">
+                                <GlassSurface variant="floating" style={S.removeImageGlass}>
+                                    <Ionicons name="trash-outline" size={17} color="#fff" />
+                                </GlassSurface>
+                            </PressableScale>
                         )}
                     </View>
                 </View>
@@ -172,37 +183,46 @@ const HeroCanvas = ({ navigation, route }: any) => {
                 {/* Bottom Toolbar */}
                 <View style={S.toolbar}>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.toolbarScroll}>
-                        
+
                         {/* Custom Image Picker */}
-                        <RippleButton onPress={handlePickImage} style={S.pickerBtn} disabled={isPickingImage}>
+                        <PressableScale
+                            onPress={handlePickImage}
+                            style={[S.pickerBtn, !!customImageUri && S.pickerBtnOn]}
+                            disabled={isPickingImage}
+                            accessibilityRole="button"
+                            accessibilityLabel="Use a photo"
+                            accessibilityState={{ selected: !!customImageUri }}
+                        >
                             {isPickingImage ? (
                                 <ActivityIndicator size="small" color="#fff" />
                             ) : (
-                                <Ionicons name="image-outline" size={24} color="#fff" />
+                                <Ionicons name="image-outline" size={22} color="#fff" />
                             )}
-                        </RippleButton>
+                        </PressableScale>
 
                         <View style={S.separator} />
 
                         {/* Solid Themes */}
-                        {THEMES.map(theme => {
+                        {HERO_THEMES.map(theme => {
                             // If an image is selected, we don't show the "selected" ring on colors
                             const isSelected = !customImageUri && theme.id === selectedThemeId;
                             return (
-                                <RippleButton
+                                <PressableScale
                                     key={theme.id}
                                     onPress={() => {
+                                        haptics.selection();
                                         setCustomImageUri(undefined); // Clear image if color chosen
                                         setSelectedThemeId(theme.id);
                                     }}
-                                    style={[
-                                        S.colorCircle,
-                                        { backgroundColor: theme.colors[0] },
-                                        isSelected && S.colorCircleSelected
-                                    ]}
+                                    style={[S.colorRing, isSelected && S.colorRingSelected]}
+                                    accessibilityRole="radio"
+                                    accessibilityLabel={theme.label}
+                                    accessibilityState={{ selected: isSelected }}
                                 >
-                                    {isSelected && <Ionicons name="checkmark" size={20} color={theme.textColor} />}
-                                </RippleButton>
+                                    <LinearGradient colors={theme.colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={S.colorCircle}>
+                                        {isSelected && <Ionicons name="checkmark" size={20} color={theme.textColor} />}
+                                    </LinearGradient>
+                                </PressableScale>
                             );
                         })}
                     </ScrollView>
@@ -214,31 +234,44 @@ const HeroCanvas = ({ navigation, route }: any) => {
 };
 
 const S = StyleSheet.create({
-    safe: { flex: 1, backgroundColor: '#000000' },
-    
+    safe: { flex: 1, backgroundColor: palette.night950 },
+
     header: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         zIndex: 10,
     },
     headerBtn: {
-        width: 40, height: 40,
-        borderRadius: 20,
-        alignItems: 'center', justifyContent: 'center',
+        minWidth: 64,
+        height: 44,
+        justifyContent: 'center',
+        paddingHorizontal: 8,
+    },
+    cancelText: {
+        fontSize: 17,
+        color: '#ffffff',
+    },
+    headerTitle: {
+        fontSize: 17,
+        fontWeight: '600',
+        color: '#ffffff',
     },
     doneBtn: {
-        backgroundColor: '#fff',
+        minWidth: 64,
+        height: 36,
+        backgroundColor: palette.purple600,
         paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     doneText: {
         fontSize: 15,
-        fontWeight: '700',
-        color: '#000',
+        fontWeight: '600',
+        color: '#ffffff',
     },
 
     canvasWrapper: {
@@ -250,9 +283,9 @@ const S = StyleSheet.create({
     },
     canvasCard: {
         width: '100%',
-        height: '100%', // Maximize space
-        maxHeight: H * 0.65, // Let keyboard breathe
-        borderRadius: 24,
+        height: '100%',
+        maxHeight: 560,
+        borderRadius: 28,
         overflow: 'hidden',
         justifyContent: 'center',
         padding: 24,
@@ -261,7 +294,7 @@ const S = StyleSheet.create({
         fontSize: 24,
         fontWeight: '600',
         textAlign: 'center',
-        lineHeight: 34,
+        lineHeight: 32,
         minHeight: 100,
         zIndex: 1,
     },
@@ -269,49 +302,58 @@ const S = StyleSheet.create({
         position: 'absolute',
         bottom: 16,
         right: 16,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        width: 36, height: 36,
-        borderRadius: 18,
-        alignItems: 'center', justifyContent: 'center',
         zIndex: 2,
     },
-
-    toolbar: {
-        paddingBottom: 20,
-        paddingTop: 12,
-    },
-    toolbarScroll: {
-        paddingHorizontal: 20,
-        alignItems: 'center',
-        gap: 16,
-    },
-    pickerBtn: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor: '#1a1a1a',
-        borderWidth: 1,
-        borderColor: '#333',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    separator: {
-        width: 1,
-        height: 32,
-        backgroundColor: '#333',
-    },
-    colorCircle: {
+    removeImageGlass: {
         width: 44,
         height: 44,
         borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+
+    toolbar: {
+        paddingBottom: 16,
+        paddingTop: 12,
+    },
+    toolbarScroll: {
+        paddingHorizontal: 20,
+        alignItems: 'center',
+        gap: 14,
+    },
+    pickerBtn: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: 'rgba(255,255,255,0.12)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pickerBtnOn: {
+        borderWidth: 2,
+        borderColor: '#ffffff',
+    },
+    separator: {
+        width: StyleSheet.hairlineWidth,
+        height: 32,
+        backgroundColor: 'rgba(255,255,255,0.24)',
+    },
+    colorRing: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        padding: 3,
         borderWidth: 2,
         borderColor: 'transparent',
     },
-    colorCircleSelected: {
+    colorRingSelected: {
         borderColor: '#ffffff',
-        transform: [{ scale: 1.1 }],
+    },
+    colorCircle: {
+        flex: 1,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 });
 

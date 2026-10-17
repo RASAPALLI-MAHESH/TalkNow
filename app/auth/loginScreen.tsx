@@ -1,27 +1,18 @@
+import { Button, TextField } from "@/app/components/ui";
 import useAuth from "@/hooks/useAuth";
 import { getAuthErrorMessage } from "@/services/AuthService";
-import { useState } from "react";
-import {
-    ActivityIndicator,
-    Alert,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
-} from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { authStyles, AUTH_COLORS } from "./authStyles";
+import { makeStyles } from "@/src/theme";
+import { useRef, useState } from "react";
+import { Alert, Text, TextInput, View } from "react-native";
+import AuthScaffold, { AuthFooterLink } from "./AuthScaffold";
 
 const LoginScreen = ({navigation} : {navigation : any}) => {
+    const s = useStyles();
     const { Login } = useAuth();
     const [UserName, setUserName] = useState("");
     const [password , setPassword] = useState("");
     const [loading, setLoading] = useState(false);
+    const passwordRef = useRef<TextInput>(null);
 
     const isFormValid = UserName.trim().length > 0 && password.trim().length > 0;
 
@@ -39,74 +30,62 @@ const LoginScreen = ({navigation} : {navigation : any}) => {
     };
 
     return (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-            <KeyboardAvoidingView
-                style={authStyles.screen}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
-                <ScrollView contentContainerStyle={authStyles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                    <View style={authStyles.iconWrap}>
-                        <Ionicons name="log-in-outline" size={28} color="#710b8d" />
-                    </View>
-                    <Text style={authStyles.title}>Welcome back</Text>
-                    <Text style={authStyles.subtitle}>Enter your details to sign in to your account.</Text>
-
-                    <Text style={authStyles.label}>Username</Text>
-                    <TextInput
-                        placeholder="Enter username"
-                        placeholderTextColor={AUTH_COLORS.placeholder}
-                        style={authStyles.input}
-                        value={UserName}
-                        onChangeText={setUserName}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        returnKeyType="next"
-                    />
-
-                    <Text style={authStyles.label}>Password</Text>
-                    <TextInput
-                        placeholder="Enter password"
-                        placeholderTextColor={AUTH_COLORS.placeholder}
-                        style={authStyles.input}
-                        value={password}
-                        onChangeText={setPassword}
-                        secureTextEntry
-                        returnKeyType="done"
-                        onSubmitEditing={() => {
-                            if (!loading && isFormValid) void handleLogin();
-                        }}
-                    />
-
-                    <View style={authStyles.rowBetween}>
-                        <Text> </Text>
-                        <Text style={authStyles.link} onPress={() => navigation.navigate("forgotPassword")}>Forgot Password?</Text>
-                    </View>
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            authStyles.button,
-                            pressed && authStyles.buttonPressed,
-                            (!isFormValid || loading) && authStyles.buttonDisabled
-                        ]}
-                        onPress={handleLogin}
-                        disabled={!isFormValid || loading}
-                    >
-                        {loading ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={authStyles.buttonText}>Login</Text>
-                        )}
-                    </Pressable>
-
-                    <View style={authStyles.bottomTextContainer}>
-                        <Text style={authStyles.bottomText}>
-                            {"Don't have an account? "}
-                            <Text style={authStyles.link} onPress={() => navigation.navigate("SignUp")}>Sign Up</Text>
-                        </Text>
-                    </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
-        </TouchableWithoutFeedback>
+        <AuthScaffold
+            icon="log-in-outline"
+            title="Welcome back"
+            subtitle="Enter your details to sign in to your account."
+            footer={<AuthFooterLink prompt="Don't have an account?" action="Sign Up" onPress={() => navigation.navigate("SignUp")} />}
+        >
+            <TextField
+                label="Username"
+                placeholder="Enter username"
+                value={UserName}
+                onChangeText={setUserName}
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="username"
+                textContentType="username"
+                returnKeyType="next"
+                onSubmitEditing={() => passwordRef.current?.focus()}
+                testID="login-username"
+            />
+            <TextField
+                ref={passwordRef}
+                label="Password"
+                placeholder="Enter password"
+                value={password}
+                onChangeText={setPassword}
+                secureToggle
+                autoComplete="current-password"
+                textContentType="password"
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                    if (!loading && isFormValid) void handleLogin();
+                }}
+                testID="login-password"
+            />
+            <View style={s.forgotRow}>
+                <Text style={s.link} onPress={() => navigation.navigate("forgotPassword")} accessibilityRole="link">
+                    Forgot Password?
+                </Text>
+            </View>
+            <Button title="Login" onPress={handleLogin} loading={loading} disabled={!isFormValid} testID="login-submit" />
+        </AuthScaffold>
     );
 };
+
+const useStyles = makeStyles((t) => ({
+    forgotRow: {
+        alignItems: 'flex-end',
+        marginTop: -t.space.xs,
+        marginBottom: t.space.sm,
+    },
+    link: {
+        ...t.type.subhead,
+        fontWeight: '600',
+        color: t.colors.tintText,
+        paddingVertical: t.space.xs,
+    },
+}));
+
 export default LoginScreen;

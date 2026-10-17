@@ -1,22 +1,9 @@
+import { BottomSheet, Button, Notice, TextField } from '@/app/components/ui';
 import { deleteAccount, getAuthErrorMessage } from '@/services/AuthService';
 import { useE2EE } from '@/services/e2ee/E2EEProvider';
+import { makeStyles } from '@/src/theme';
 import React, { useState } from 'react';
-import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-} from 'react-native';
-
-const RED = '#ef4444';
-const INK = '#1a1a2e';
-const MUTED = '#6b7280';
+import { Alert, View } from 'react-native';
 
 /** Asks for the password, then permanently deletes the account and calls `onDeleted`. */
 const DeleteAccountModal = ({
@@ -28,6 +15,7 @@ const DeleteAccountModal = ({
     onClose: () => void;
     onDeleted: () => void;
 }) => {
+    const s = useStyles();
     const [password, setPassword] = useState('');
     const [deleting, setDeleting] = useState(false);
     const { engine } = useE2EE();
@@ -55,65 +43,43 @@ const DeleteAccountModal = ({
     };
 
     return (
-        <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
-            <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                <View style={styles.card}>
-                    <Text style={styles.title}>Delete account?</Text>
-                    <Text style={styles.body}>
-                        This permanently deletes your profile, photos, connections and all your messages,
-                        including your messages in other people&apos;s chats. This can&apos;t be undone.
-                    </Text>
-                    <TextInput
-                        style={styles.input}
-                        value={password}
-                        onChangeText={setPassword}
-                        placeholder="Enter your password to confirm"
-                        placeholderTextColor={MUTED}
-                        secureTextEntry
-                        autoCapitalize="none"
-                        editable={!deleting}
-                    />
-                    <View style={styles.buttons}>
-                        <Pressable onPress={close} style={[styles.button, styles.cancel]} accessibilityRole="button">
-                            <Text style={styles.cancelText}>Cancel</Text>
-                        </Pressable>
-                        <Pressable
-                            onPress={() => void confirm()}
-                            disabled={!password || deleting}
-                            style={[styles.button, styles.delete, (!password || deleting) && styles.disabled]}
-                            accessibilityRole="button"
-                        >
-                            {deleting ? <ActivityIndicator color="#fff" /> : <Text style={styles.deleteText}>Delete</Text>}
-                        </Pressable>
-                    </View>
+        <BottomSheet visible={visible} onClose={close} dismissible={!deleting} title="Delete account?">
+            <View style={s.body}>
+                <Notice tone="danger" icon="warning-outline">
+                    This permanently deletes your profile, photos, connections and all your messages, including your
+                    messages in other people&apos;s chats. This can&apos;t be undone.
+                </Notice>
+                <TextField
+                    label="Password"
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Enter your password to confirm"
+                    secureToggle
+                    autoCapitalize="none"
+                    autoComplete="current-password"
+                    textContentType="password"
+                    editable={!deleting}
+                    returnKeyType="done"
+                    onSubmitEditing={() => void confirm()}
+                />
+                <View style={s.buttons}>
+                    <Button title="Cancel" variant="gray" onPress={close} disabled={deleting} style={s.flex1} />
+                    <Button title="Delete" variant="destructive" onPress={() => void confirm()} disabled={!password} loading={deleting} style={s.flex1} />
                 </View>
-            </KeyboardAvoidingView>
-        </Modal>
+            </View>
+        </BottomSheet>
     );
 };
 
-const styles = StyleSheet.create({
-    backdrop: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.45)' },
-    card: { backgroundColor: '#fff', borderRadius: 16, padding: 20 },
-    title: { fontSize: 18, fontWeight: '700', color: INK },
-    body: { fontSize: 14, color: MUTED, marginTop: 8, lineHeight: 20 },
-    input: {
-        height: 48,
-        borderWidth: 1,
-        borderColor: '#e5e7eb',
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        marginTop: 16,
-        fontSize: 15,
-        color: INK,
+const useStyles = makeStyles((t) => ({
+    body: {
+        gap: t.space.lg,
     },
-    buttons: { flexDirection: 'row', marginTop: 16, gap: 12 },
-    button: { flex: 1, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-    cancel: { backgroundColor: '#f3f4f6' },
-    cancelText: { fontSize: 15, fontWeight: '600', color: INK },
-    delete: { backgroundColor: RED },
-    deleteText: { fontSize: 15, fontWeight: '700', color: '#fff' },
-    disabled: { opacity: 0.5 },
-});
+    buttons: {
+        flexDirection: 'row',
+        gap: t.space.md,
+    },
+    flex1: { flex: 1 },
+}));
 
 export default DeleteAccountModal;

@@ -1,260 +1,128 @@
 /**
- * chatroomStyles.ts — FINAL PIXEL PERFECT VERSION
- * Eliminates:
- * - Last 1–5px bottom gap
- * - Hidden padding stacking
- * - Layout inconsistencies
+ * chatroomStyles.ts: themed styles for the conversation screen.
+ * Colours come from the theme tokens (src/theme), so light and dark both work.
  */
 
-import { Platform, StyleSheet } from 'react-native';
+import { makeStyles } from '@/src/theme';
 
-/* ── Design Tokens ─────────────────────────────────────── */
-const PURPLE_PRIMARY   = '#6733d0';
-const PURPLE_DARK      = '#4c1f9e';
-const PURPLE_LIGHT     = '#ede6ff';
-const PURPLE_XLIGHT    = '#f8f5ff';
-const WHITE            = '#ffffff';
-const INK              = '#1a1a2e';
-const INK_MUTED        = '#7b7b9d';
-const BUBBLE_SHADOW    = 'rgba(103,51,208,0.10)';
-const SEPARATOR        = 'rgba(103,51,208,0.08)';
-
-const FONT_REGULAR = Platform.select({ ios: 'System', android: 'sans-serif' });
-const FONT_MEDIUM  = Platform.select({ ios: 'System', android: 'sans-serif-medium' });
-
-export const styles = StyleSheet.create({
-
+export const useChatroomStyles = makeStyles((t) => ({
     /* ── Layout ── */
 
-    safe: {
+    screen: {
         flex: 1,
-        backgroundColor: PURPLE_XLIGHT,
+        backgroundColor: t.colors.ground,
     },
 
-    container: {
+    flex: {
         flex: 1,
-        backgroundColor: PURPLE_XLIGHT,
     },
 
     /* ── Header ── */
 
-    header: {
+    headerIdentity: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 12,
-        backgroundColor: WHITE,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: SEPARATOR,
-        gap: 2,
-        ...Platform.select({
-            ios: {
-                shadowColor: BUBBLE_SHADOW,
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.08,
-                shadowRadius: 3,
-            },
-            android: {
-                elevation: 2,
-            },
-        }),
+        gap: t.space.sm + 2,
+        alignSelf: 'stretch',
     },
 
-    headerIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    avatarBtn: {
-        marginLeft: 2,
-        position: 'relative',
-    },
-
-    avatarImage: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        borderWidth: 2,
-        borderColor: PURPLE_PRIMARY,
-    },
-
-    avatarFallback: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: PURPLE_PRIMARY,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    avatarFallbackText: {
-        color: WHITE,
-        fontSize: 16,
-        fontWeight: '600',
-        fontFamily: FONT_MEDIUM,
-    },
-
-    headerTitleWrap: {
+    headerText: {
         flex: 1,
-        paddingHorizontal: 4,
-        justifyContent: 'center',
+        minWidth: 0,
     },
 
     headerTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: INK,
-        fontFamily: FONT_MEDIUM,
+        ...t.type.headline,
+        color: t.colors.label,
     },
 
-    pressed: {
-        opacity: 0.6,
+    headerSubRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+
+    headerSubtitle: {
+        ...t.type.caption1,
+        color: t.colors.secondaryLabel,
     },
 
     /* ── Messages ── */
 
     messagesContent: {
-        paddingHorizontal: 16,
-        paddingTop: 16,
-        paddingBottom: 16,
+        paddingHorizontal: t.space.md,
         flexGrow: 1,
         justifyContent: 'flex-end',
     },
 
-    bubbleRow: {
-        marginBottom: 6,
-        maxWidth: '80%',
+    dayRow: {
+        alignItems: 'center',
+        marginTop: t.space.lg,
+        marginBottom: t.space.sm,
     },
 
-    bubbleRowMe: {
-        alignSelf: 'flex-end',
-        alignItems: 'flex-end',
-    },
-
-    bubbleRowOther: {
-        alignSelf: 'flex-start',
-        alignItems: 'flex-start',
-    },
-
-    bubble: {
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        borderRadius: 20,
-        ...Platform.select({
-            ios: {
-                 shadowColor: BUBBLE_SHADOW,
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 1,
-                shadowRadius: 4,
-            },
-            android: {
-                elevation: 2,
-            },
-        }),
-    },
-
-    bubbleMe: {
-        backgroundColor: PURPLE_PRIMARY,
-        borderBottomRightRadius: 4,
-    },
-
-    bubbleOther: {
-        backgroundColor: WHITE,
-    
-        borderColor: PURPLE_LIGHT,
-        borderBottomLeftRadius: 4,
-    },
-
-    bubbleText: {
-        fontSize: 15,
-        lineHeight: 21,
-        fontFamily: FONT_REGULAR,
-    },
-
-    bubbleTextMe: {
-        color: WHITE,
-    },
-
-    bubbleTextOther: {
-        color: INK,
-    },
-
-    timestamp: {
-        fontSize: 10,
-        marginTop: 3,
-        color: INK_MUTED,
-        fontFamily: FONT_REGULAR,
+    dayText: {
+        ...t.type.caption1,
+        fontWeight: '600',
+        color: t.colors.secondaryLabel,
     },
 
     /* ── Composer ── */
 
-    composerContainer: {
-        borderTopColor: SEPARATOR,
-        backgroundColor: PURPLE_XLIGHT,
-        marginBottom: 0,
+    composerDock: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
     },
 
-    composerOuter: {
-        paddingTop: 6,
-        paddingHorizontal: 16,
-        paddingBottom: 2, // 🔥 FIXED (was 8)
+    composer: {
+        paddingTop: t.space.sm,
+        paddingHorizontal: t.space.md,
+    },
+
+    composerHairline: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: t.size.hairline,
+        backgroundColor: t.colors.separator,
     },
 
     inputBar: {
         flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
+        alignItems: 'flex-end',
+        gap: t.space.sm,
     },
 
     input: {
         flex: 1,
-        fontSize: 16,
-        lineHeight: 20,
-        color: INK,
-        fontFamily: FONT_REGULAR,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        maxHeight: 120,
-        backgroundColor: WHITE,
-        borderRadius: 25,
-        borderColor: PURPLE_DARK,
-        borderWidth: 1.2,
+        ...t.type.callout,
+        lineHeight: 21,
+        color: t.colors.label,
+        paddingHorizontal: t.space.lg,
+        paddingTop: 10,
+        paddingBottom: 10,
+        minHeight: 42,
+        maxHeight: 132,
+        backgroundColor: t.colors.surface,
+        borderRadius: 21,
+        borderWidth: t.size.hairline,
+        borderColor: t.colors.separator,
     },
 
     sendBtn: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: PURPLE_PRIMARY,
+        width: 38,
+        height: 38,
+        borderRadius: 19,
         alignItems: 'center',
         justifyContent: 'center',
-        flexShrink: 0,
-        ...Platform.select({
-            ios: {
-                shadowColor: PURPLE_DARK,
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.4,
-                shadowRadius: 8,
-            },
-            android: {
-                elevation: 2,
-            },
-        }),
+        marginBottom: 2,
     },
 
     /* ── Encryption notices ── */
-
-    headerLock: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginLeft: 'auto',
-    },
 
     notice: {
         alignSelf: 'center',
@@ -262,64 +130,87 @@ export const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        backgroundColor: PURPLE_LIGHT,
-        borderRadius: 12,
-        paddingVertical: 6,
-        paddingHorizontal: 12,
-        marginVertical: 6,
+        backgroundColor: t.colors.fill,
+        borderRadius: t.radius.md,
+        paddingVertical: 7,
+        paddingHorizontal: t.space.md,
+        marginVertical: t.space.sm,
+    },
+
+    noticeWarn: {
+        backgroundColor: t.colors.warningSoft,
     },
 
     noticeText: {
         flexShrink: 1,
-        fontSize: 12,
-        lineHeight: 16,
-        color: INK_MUTED,
-        fontFamily: FONT_REGULAR,
+        ...t.type.caption1,
+        color: t.colors.secondaryLabel,
         textAlign: 'center',
+    },
+
+    bannerDock: {
+        position: 'absolute',
+        left: t.space.md,
+        right: t.space.md,
+        zIndex: 11,
     },
 
     banner: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        backgroundColor: '#fff7ed',
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: '#fed7aa',
+        gap: t.space.sm,
+        paddingLeft: t.space.md,
+        paddingRight: t.space.sm,
+        paddingVertical: t.space.sm,
+        borderRadius: t.radius.lg,
+        backgroundColor: t.dark ? t.colors.surfaceRaised : t.colors.warningSoft,
+        borderWidth: t.size.hairline,
+        borderColor: t.colors.warningLine,
+        shadowColor: t.colors.shadow,
+        shadowOpacity: t.dark ? 0.4 : 0.08,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 3,
     },
 
     bannerText: {
         flex: 1,
-        fontSize: 13,
-        lineHeight: 18,
-        color: INK,
-        fontFamily: FONT_REGULAR,
+        ...t.type.footnote,
+        color: t.colors.label,
     },
 
     bannerButton: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 14,
-        backgroundColor: WHITE,
-        borderWidth: 1,
-        borderColor: SEPARATOR,
+        minHeight: 32,
+        paddingHorizontal: t.space.md,
+        borderRadius: t.radius.pill,
+        backgroundColor: t.colors.surface,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 
     bannerButtonText: {
-        fontSize: 13,
-        color: PURPLE_PRIMARY,
-        fontFamily: FONT_MEDIUM,
+        ...t.type.footnote,
+        fontWeight: '600',
+        color: t.colors.tintText,
     },
 
     encryptedHint: {
         alignSelf: 'center',
+        maxWidth: 320,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        paddingVertical: 4,
-        paddingHorizontal: 12,
-        marginTop: 4,
-        marginBottom: 10,
+        paddingVertical: t.space.sm,
+        paddingHorizontal: t.space.md,
+        marginBottom: t.space.md,
+        borderRadius: t.radius.md,
+        backgroundColor: t.colors.fill,
     },
-});
+
+    encryptedHintText: {
+        flexShrink: 1,
+        ...t.type.caption1,
+        color: t.colors.secondaryLabel,
+        textAlign: 'center',
+    },
+}));

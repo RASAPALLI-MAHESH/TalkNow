@@ -1,24 +1,12 @@
 import AvatarPicker from '@/app/components/AvatarPicker';
+import { Button, PressableScale, TextField } from '@/app/components/ui';
 import { checkUsernameAvailability, getAuthErrorMessage } from '@/services/AuthService';
+import { makeStyles, useTheme } from '@/src/theme';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-    Alert,
-    Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Alert, Text, View } from 'react-native';
+import AuthScaffold from '../AuthScaffold';
 
 type RouteParams = {
 	Firstname: string;
@@ -29,7 +17,11 @@ type RouteParams = {
 	username?: string;
 };
 
+const DEFAULT_HELPER = 'This username will be visible across the app.';
+
 const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?: RouteParams } }) => {
+	const s = useStyles();
+	const { colors } = useTheme();
 	const Firstname = String(route?.params?.Firstname ?? '').trim();
 	const email = String(route?.params?.email ?? '').trim();
 	const otp = String(route?.params?.otp ?? '').trim();
@@ -37,11 +29,15 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 	const [profilePicturePayload, setProfilePicturePayload] = useState(String(route?.params?.profilePicture ?? ''));
 	const [username, setUsername] = useState(String(route?.params?.username ?? ''));
 	const [checking, setChecking] = useState(false);
-	const [helper, setHelper] = useState('This username will be visible across the app.');
-	const scrollRef = React.useRef<ScrollView | null>(null);
+	const [helper, setHelper] = useState(DEFAULT_HELPER);
+	const [taken, setTaken] = useState(false);
 
 	const trimmedUsername = useMemo(() => username.trim(), [username]);
 	const usernameFormatValid = /^[a-zA-Z0-9_]{3,24}$/.test(trimmedUsername);
+	const formatError =
+		trimmedUsername.length > 0 && !usernameFormatValid
+			? 'Use 3-24 characters with letters, numbers, or underscore.'
+			: undefined;
 
 	const pickAvatar = useCallback(async () => {
 		try {
@@ -93,8 +89,8 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 			setChecking(true);
 			const result = await checkUsernameAvailability(trimmedUsername);
 			if (!result?.available) {
+				setTaken(true);
 				setHelper('This username is already taken. Try another one.');
-				Alert.alert('Username unavailable', 'Try a different username.');
 				return;
 			}
 			if (typeof result?.message === 'string' && result.message.includes('endpoint unavailable')) {
@@ -120,164 +116,103 @@ const AvatarandAge = ({ navigation, route }: { navigation: any; route: { params?
 	}, [Firstname, email, otp, usernameFormatValid, navigation, avatarUri, profilePicturePayload, trimmedUsername]);
 
 	return (
-		<>
-			<StatusBar barStyle="dark-content" backgroundColor="#f7f9fe" />
-			<SafeAreaView style={styles.safe}>
-				<TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-					<KeyboardAvoidingView
-						style={styles.safe}
-						behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-						keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
-					>
-						<ScrollView
-							ref={scrollRef}
-							contentContainerStyle={styles.content}
-							keyboardShouldPersistTaps="handled"
-							keyboardDismissMode="interactive"
-							showsVerticalScrollIndicator={false}
-						>
-							<LinearGradient
-								colors={['#f0f9ff', '#f7f9fe']}
-								start={{ x: 0, y: 0 }}
-								end={{ x: 1, y: 1 }}
-								style={styles.hero}
-							>
-								<Text style={styles.title}>Profile Setup</Text>
-								<Text style={styles.subtitle}>Add your photo and username so friends can find you instantly</Text>
-							</LinearGradient>
+		<AuthScaffold
+			icon="person-circle-outline"
+			title="Profile Setup"
+			subtitle="Add your photo and username so friends can find you instantly"
+			onBack={() => navigation.goBack()}
+			step={{ step: 3, of: 4 }}
+		>
+			<View style={s.avatarBlock}>
+				<PressableScale
+					onPress={pickAvatar}
+					style={s.avatarPressable}
+					accessibilityRole="button"
+					accessibilityLabel={avatarUri ? 'Change profile photo' : 'Choose profile photo'}
+				>
+					{avatarUri ? (
+						<AvatarPicker
+							uri={avatarUri}
+							name={trimmedUsername || Firstname || 'User'}
+							size={120}
+							style={s.avatarImage}
+							previewEnabled={false}
+						/>
+					) : (
+						<View style={s.avatarPlaceholder}>
+							<Ionicons name="person" size={52} color={colors.tertiaryLabel} />
+						</View>
+					)}
+					<View style={s.cameraBadge}>
+						<Ionicons name="camera" size={17} color={colors.onTint} />
+					</View>
+				</PressableScale>
+				<Text style={s.avatarHint}>{avatarUri ? 'Tap to change photo' : 'Tap to add profile photo'}</Text>
+			</View>
 
-							<Pressable
-								onPress={pickAvatar}
-								style={({ pressed }) => [styles.avatarPressable, pressed && styles.pressed]}
-								accessibilityRole="button"
-								accessibilityLabel="Choose profile photo"
-							>
-								{avatarUri ? (
-									<AvatarPicker
-										uri={avatarUri}
-										name={trimmedUsername || Firstname || 'User'}
-										size={120}
-										style={styles.avatarImage}
-										previewEnabled
-									/>
-								) : (
-									<View style={styles.avatarPlaceholder}>
-										<Ionicons name="person" size={56} color="#a0a7b4" />
-									</View>
-								)}
-								<View style={styles.cameraBadge}>
-									<Ionicons name="camera" size={18} color="#fff" />
-								</View>
-							</Pressable>
+			<TextField
+				label="Username"
+				prefix="@"
+				value={username}
+				onChangeText={(value) => {
+					setUsername(value);
+					setTaken(false);
+					setHelper(DEFAULT_HELPER);
+				}}
+				autoCapitalize="none"
+				autoCorrect={false}
+				autoComplete="username-new"
+				textContentType="username"
+				placeholder="choose_username"
+				maxLength={24}
+				returnKeyType="next"
+				onSubmitEditing={() => void onContinue()}
+				error={formatError ?? (taken ? helper : undefined)}
+				success={!taken && helper.includes('available') ? helper : undefined}
+				helper={helper}
+				testID="onboarding-username"
+			/>
 
-							<Text style={styles.avatarHint}>Tap to add profile photo</Text>
-
-							<View style={styles.formCard}>
-								<Text style={styles.inputLabel}>Username</Text>
-								<TextInput
-									style={styles.input}
-									value={username}
-									onChangeText={(value) => {
-										setUsername(value);
-										setHelper('This username will be visible across the app.');
-									}}
-									onFocus={() => {
-										setTimeout(() => {
-											scrollRef.current?.scrollTo({ y: 260, animated: true });
-										}, 80);
-									}}
-									autoCapitalize="none"
-									autoCorrect={false}
-									placeholder="choose_username"
-									placeholderTextColor="#96a0b1"
-									maxLength={24}
-								/>
-								<Text style={[styles.helperText, helper.includes('available') && styles.helperTextSuccess]}>{helper}</Text>
-							</View>
-
-							<View style={styles.footerButtons}>
-								<Pressable
-									onPress={() => navigation.goBack()}
-									style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}
-								>
-									<Text style={styles.skipText}>Back</Text>
-								</Pressable>
-
-								<Pressable
-									onPress={onContinue}
-									disabled={!usernameFormatValid || checking}
-									style={({ pressed }) => [
-										styles.continueButton,
-										(!usernameFormatValid || checking) && styles.continueButtonDisabled,
-										pressed && styles.pressed,
-									]}
-								>
-									<Text style={styles.continueText}>{checking ? 'Checking...' : 'Next'}</Text>
-								</Pressable>
-							</View>
-						</ScrollView>
-					</KeyboardAvoidingView>
-				</TouchableWithoutFeedback>
-			</SafeAreaView>
-		</>
+			<View style={s.footerButtons}>
+				<Button title="Back" variant="gray" onPress={() => navigation.goBack()} style={s.back} />
+				<Button
+					title={checking ? 'Checking...' : 'Next'}
+					onPress={() => void onContinue()}
+					disabled={!usernameFormatValid || checking}
+					style={s.next}
+				/>
+			</View>
+		</AuthScaffold>
 	);
 };
 
-const styles = StyleSheet.create({
-	safe: {
-		flex: 1,
-		backgroundColor: '#f6f7fb',
-	},
-	content: {
-		flexGrow: 1,
+const useStyles = makeStyles((t) => ({
+	avatarBlock: {
 		alignItems: 'center',
-		paddingHorizontal: 24,
-		paddingTop: 20,
-		paddingBottom: 18,
-	},
-	hero: {
-		width: '100%',
-		borderRadius: 20,
-		paddingHorizontal: 18,
-		paddingVertical: 18,
-		borderWidth: 1,
-		borderColor: '#e6edf9',
-	},
-	title: {
-		fontSize: 24,
-		fontWeight: '800',
-		color: '#1b1f2a',
-		letterSpacing: -0.3,
-	},
-	subtitle: {
-		marginTop: 8,
-		textAlign: 'left',
-		color: '#5b6473',
-		fontSize: 15,
-		lineHeight: 22,
+		marginBottom: t.space.sm,
 	},
 	avatarPressable: {
-		marginTop: 28,
-		width: 136,
-		height: 136,
-		borderRadius: 68,
-	},
-	avatarImage: {
-		width: '100%',
-		height: '100%',
-		borderRadius: 68,
-		borderWidth: 3,
-		borderColor: '#25d366',
-	},
-	avatarPlaceholder: {
-		width: '100%',
-		height: '100%',
-		borderRadius: 68,
-		backgroundColor: '#e7e9ef',
+		width: 128,
+		height: 128,
+		borderRadius: 64,
 		alignItems: 'center',
 		justifyContent: 'center',
-		borderWidth: 2,
-		borderColor: '#d7dbe5',
+	},
+	avatarImage: {
+		width: 120,
+		height: 120,
+		borderRadius: 60,
+	},
+	avatarPlaceholder: {
+		width: 120,
+		height: 120,
+		borderRadius: 60,
+		backgroundColor: t.colors.surface,
+		borderWidth: 1.5,
+		borderStyle: 'dashed',
+		borderColor: t.colors.tintText,
+		alignItems: 'center',
+		justifyContent: 'center',
 	},
 	cameraBadge: {
 		position: 'absolute',
@@ -288,89 +223,26 @@ const styles = StyleSheet.create({
 		borderRadius: 19,
 		alignItems: 'center',
 		justifyContent: 'center',
-		backgroundColor: '#25d366',
-		borderWidth: 2,
-		borderColor: '#fff',
+		backgroundColor: t.colors.tint,
+		borderWidth: 3,
+		borderColor: t.colors.ground,
 	},
 	avatarHint: {
-		marginTop: 12,
-		fontSize: 14,
-		color: '#4f596a',
-		fontWeight: '500',
-	},
-	formCard: {
-		marginTop: 30,
-		width: '100%',
-		backgroundColor: '#fff',
-		borderRadius: 16,
-		paddingVertical: 18,
-		paddingHorizontal: 16,
-		borderWidth: 1,
-		borderColor: '#e2e6ef',
-	},
-	inputLabel: {
-		fontSize: 15,
-		fontWeight: '700',
-		color: '#2b3240',
-		marginBottom: 10,
-	},
-	input: {
-		height: 52,
-		borderRadius: 14,
-		borderWidth: 1,
-		borderColor: '#d8dde8',
-		backgroundColor: '#f9fbff',
-		paddingHorizontal: 14,
-		fontSize: 16,
-		color: '#1f2430',
-	},
-	helperText: {
-		marginTop: 8,
-		fontSize: 12,
-		color: '#728096',
-	},
-	helperTextSuccess: {
-		color: '#0d7f4d',
+		...t.type.footnote,
+		color: t.colors.secondaryLabel,
+		marginTop: t.space.md,
 	},
 	footerButtons: {
-		marginTop: 24,
-		width: '100%',
+		marginTop: t.space.sm,
 		flexDirection: 'row',
-		gap: 12,
-		paddingBottom: 8,
+		gap: t.space.md,
 	},
-	skipButton: {
+	back: {
 		flex: 1,
-		height: 52,
-		borderRadius: 14,
-		alignItems: 'center',
-		justifyContent: 'center',
-		backgroundColor: '#edf0f5',
 	},
-	continueButton: {
+	next: {
 		flex: 2,
-		height: 52,
-		borderRadius: 14,
-		alignItems: 'center',
-		justifyContent: 'center',
-		backgroundColor: '#0d4d47',
 	},
-	continueButtonDisabled: {
-		backgroundColor: '#90aaa7',
-	},
-	skipText: {
-		color: '#4f596a',
-		fontSize: 16,
-		fontWeight: '700',
-	},
-	continueText: {
-		color: '#fff',
-		fontSize: 16,
-		fontWeight: '700',
-	},
-	pressed: {
-		opacity: 0.82,
-	},
-});
+}));
 
 export default AvatarandAge;

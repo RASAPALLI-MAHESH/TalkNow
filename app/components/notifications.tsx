@@ -1,8 +1,18 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Button,
+    EmptyState,
+    NavBar,
+    PressableScale,
+    SearchField,
+    SegmentedControl,
+    useNavBarHeight,
+} from '@/app/components/ui';
+import { makeStyles, useTheme } from '@/src/theme';
 import * as SecureStore from 'expo-secure-store';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, FlatList, Platform, RefreshControl, Text, View, useWindowDimensions } from 'react-native';
+import Animated, { useAnimatedScrollHandler, useSharedValue } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import useAuth from '../../hooks/useAuth';
 import {
     acceptFollowRequest as acceptFollowRequestApi,
@@ -18,10 +28,10 @@ import AvatarPicker from './AvatarPicker';
 import FollowRequestComponent from './followRequestComponent';
 import FollowRequestNotification from './followrequestNotification';
 
-const HEADER_HEIGHT = 56;
 const TAB_TITLES = ['Notifications', 'Follow requests', 'All connections'] as const;
 
 const LAST_SEEN_KEY = 'notificationsLastSeenAt';
+const CONTROLS_HEIGHT = 52;
 
 type NotificationItem = {
     id: string;
@@ -53,11 +63,30 @@ const mergeByIdNewestFirst = (incoming: NotificationItem[], existing: Notificati
     return merged;
 };
 
+// "now", "5m", "3h", "2d", then a short date.
+const relativeTime = (iso?: string) => {
+    if (!iso) return '';
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return '';
+    const mins = Math.floor((Date.now() - t) / 60000);
+    if (mins < 1) return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d`;
+    return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
 const Notifications = ({ navigation }: { navigation: any }) => {
+    const s = useStyles();
+    const { colors } = useTheme();
     const { user } = useAuth();
     const currentUserId = typeof user?.id === 'string' ? user.id : user?.id ? String(user.id) : '';
+    const insets = useSafeAreaInsets();
+    const navHeight = useNavBarHeight();
 
-    const pagerRef = useRef<ScrollView | null>(null);
+    const pagerRef = useRef<Animated.ScrollView | null>(null);
     const [items, setItems] = useState<NotificationItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [activeTab, setActiveTab] = useState(0);
@@ -67,6 +96,12 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const [connectionsQuery, setConnectionsQuery] = useState('');
     const [refreshing, setRefreshing] = useState(false);
     const { width } = useWindowDimensions();
+
+    // Pager position in pages, so the segmented lens follows the swipe.
+    const pageProgress = useSharedValue(0);
+    const onPagerScroll = useAnimatedScrollHandler((e) => {
+        pageProgress.value = e.contentOffset.x / Math.max(width, 1);
+    });
 
     const followRequestItems = useMemo(() => {
         return items.filter((item) => {
@@ -255,127 +290,113 @@ const Notifications = ({ navigation }: { navigation: any }) => {
         void loadConnections();
     }, [loadConnections]);
 
+    const openChat = (item: MutualConnectionItem) =>
+        navigation.navigate('Chatroom', { peerId: item.id, peerUsername: item.username, peerAvatar: item.profilePicture });
+    const openProfile = (item: MutualConnectionItem) =>
+        navigation.navigate('FullProfile', { peerId: item.id, peerUsername: item.username, peerAvatar: item.profilePicture });
+
+    const listTop = navHeight + CONTROLS_HEIGHT + 8;
+    const listBottom = Math.max(insets.bottom, 16) + 24;
+    const refresh = (
+        <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void handlePullToRefresh()}
+            tintColor={colors.secondaryLabel}
+            colors={[colors.tint]}
+            progressViewOffset={listTop}
+        />
+    );
+
+    const Separator = () => (
+        <View style={s.separatorWrap}>
+            <View style={s.separator} />
+        </View>
+    );
+
+    // Rows sit in one rounded group: round the first and last.
+    const groupCorners = (index: number, count: number) => [
+        s.groupRow,
+        index === 0 && s.groupFirst,
+        index === count - 1 && s.groupLast,
+    ];
+
     return (
-        <SafeAreaView style={styles.container} edges={['top']}>
-            <View style={styles.header}>
-                <Pressable
-                    style={({ pressed }) => [styles.headerButton, pressed && styles.headerButtonPressed]}
-                    onPress={() => navigation.goBack()}
-                    hitSlop={10}
-                    accessibilityRole="button"
-                    accessibilityLabel="Back"
-                >
-                    <Ionicons name="arrow-back" size={22} color="#1a1073" />
-                </Pressable>
-
-                <Text style={styles.headerText} numberOfLines={1}>
-                    Notifications
-                </Text>
-
-                {/* Right spacer keeps title perfectly centered */}
-                <View style={styles.headerRightSpacer} />
-            </View>
-
-            <View style={styles.tabsRow}>
-                {TAB_TITLES.map((title, index) => {
-                    const selected = activeTab === index;
-                    return (
-                        <Pressable
-                            key={title}
-                            style={({ pressed }) => [
-                                styles.tabButton,
-                                selected && styles.tabButtonActive,
-                                pressed && styles.tabButtonPressed,
-                            ]}
-                            onPress={() => goToTab(index)}
-                            accessibilityRole="button"
-                            accessibilityLabel={title}
-                        >
-                            <Text style={[styles.tabText, selected && styles.tabTextActive]} numberOfLines={1}>
-                                {title}
-                            </Text>
-                        </Pressable>
-                    );
-                })}
-            </View>
-
-            <ScrollView
+        <View style={s.screen}>
+            <Animated.ScrollView
                 ref={pagerRef}
                 horizontal
                 pagingEnabled
                 showsHorizontalScrollIndicator={false}
+                onScroll={onPagerScroll}
+                scrollEventThrottle={16}
                 onMomentumScrollEnd={(event) => {
                     const nextTab = Math.round(event.nativeEvent.contentOffset.x / Math.max(width, 1));
                     setActiveTab(nextTab);
                 }}
             >
-                <View style={[styles.page, { width }]}>
-                    <View style={styles.body}>
-                        <FlatList
-                            data={items}
-                            keyExtractor={(item) => item.id}
-                            refreshing={refreshing}
-                            onRefresh={() => {
-                                void handlePullToRefresh();
-                            }}
-                            initialNumToRender={8}
-                            maxToRenderPerBatch={8}
-                            windowSize={7}
-                            removeClippedSubviews={Platform.OS === 'android'}
-                            renderItem={({ item }) => (
+                {/* ── Activity ── */}
+                <View style={{ width }}>
+                    <FlatList
+                        data={items}
+                        keyExtractor={(item) => item.id}
+                        refreshControl={refresh}
+                        initialNumToRender={8}
+                        maxToRenderPerBatch={8}
+                        windowSize={7}
+                        removeClippedSubviews={Platform.OS === 'android'}
+                        renderItem={({ item, index }) => (
+                            <View style={groupCorners(index, items.length)}>
                                 <FollowRequestNotification
                                     username={item.username}
                                     profilePicture={item.profilePicture}
                                     message={item.message}
+                                    time={relativeTime(item.createdAt)}
                                     onClose={() => {
                                         void dismissNotification(item.id);
                                     }}
                                 />
-                            )}
-                            style={styles.list}
-                            contentContainerStyle={[
-                                styles.listContent,
-                                items.length === 0 && styles.listContentEmpty,
-                            ]}
-                            ListEmptyComponent={
-                                <View style={styles.emptyWrap}>
-                                    {loading ? (
-                                        <>
-                                            <ActivityIndicator size="small" color="#6733d0" />
-                                            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading notifications…</Text>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Text style={styles.emptyTitle}>No notifications yet</Text>
-                                            <Text style={styles.emptySubtitle}>Follow/unfollow activity will show up here.</Text>
-                                        </>
-                                    )}
+                            </View>
+                        )}
+                        ItemSeparatorComponent={Separator}
+                        contentContainerStyle={[
+                            { paddingTop: listTop, paddingBottom: listBottom },
+                            items.length === 0 && s.listEmpty,
+                        ]}
+                        ListEmptyComponent={
+                            loading ? (
+                                <View style={s.loading}>
+                                    <ActivityIndicator size="small" color={colors.tintText} />
+                                    <Text style={s.loadingText}>Loading notifications…</Text>
                                 </View>
-                            }
-                            keyboardShouldPersistTaps="handled"
-                            showsVerticalScrollIndicator={false}
-                        />
-                    </View>
+                            ) : (
+                                <EmptyState
+                                    icon="notifications-outline"
+                                    title="No notifications yet"
+                                    message="Follow/unfollow activity will show up here."
+                                />
+                            )
+                        }
+                        showsVerticalScrollIndicator={false}
+                    />
                 </View>
 
-                <View style={[styles.page, { width }]}>
-                    <View style={styles.body}>
-                        <FlatList
-                            data={followRequestItems}
-                            keyExtractor={(item) => item.id}
-                            refreshing={refreshing}
-                            onRefresh={() => {
-                                void handlePullToRefresh();
-                            }}
-                            initialNumToRender={8}
-                            maxToRenderPerBatch={8}
-                            windowSize={7}
-                            removeClippedSubviews={Platform.OS === 'android'}
-                            renderItem={({ item }) => (
+                {/* ── Follow requests ── */}
+                <View style={{ width }}>
+                    <FlatList
+                        data={followRequestItems}
+                        keyExtractor={(item) => item.id}
+                        refreshControl={refresh}
+                        initialNumToRender={8}
+                        maxToRenderPerBatch={8}
+                        windowSize={7}
+                        removeClippedSubviews={Platform.OS === 'android'}
+                        renderItem={({ item, index }) => (
+                            <View style={groupCorners(index, followRequestItems.length)}>
                                 <FollowRequestComponent
                                     username={item.username}
                                     profilePicture={item.profilePicture}
                                     message={item.message}
+                                    busy={!!followActionPendingById[item.id]}
                                     onAccept={() => {
                                         if (!followActionPendingById[item.id]) {
                                             void handleAcceptFollowRequest(item.id);
@@ -387,351 +408,195 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                                         }
                                     }}
                                 />
-                            )}
-                            style={styles.list}
-                            contentContainerStyle={[
-                                styles.listContent,
-                                followRequestItems.length === 0 && styles.listContentEmpty,
-                            ]}
-                            ListEmptyComponent={
-                                <View style={styles.emptyWrap}>
-                                    <Text style={styles.emptyTitle}>No follow requests yet</Text>
-                                    <Text style={styles.emptySubtitle}>When someone sends a follow request, it will appear here instantly.</Text>
-                                </View>
-                            }
-                            keyboardShouldPersistTaps="handled"
-                            showsVerticalScrollIndicator={false}
-                        />
-                    </View>
-                </View>
-
-                <View style={[styles.page, { width }]}>
-                    <View style={styles.body}>
-                        <View style={styles.connectionsSearchWrap}>
-                            <View style={styles.connectionsSearchBar}>
-                                <Ionicons name="search" size={18} color="#6733d0" />
-                                <TextInput
-                                    value={connectionsQuery}
-                                    onChangeText={setConnectionsQuery}
-                                    placeholder="Search connections"
-                                    placeholderTextColor="#8b79b7"
-                                    style={styles.connectionsSearchInput}
-                                    autoCapitalize="none"
-                                    autoCorrect={false}
-                                />
                             </View>
-                        </View>
-
-                        <FlatList
-                            data={filteredConnections}
-                            keyExtractor={(item) => item.id}
-                            refreshing={refreshing}
-                            onRefresh={() => {
-                                void handlePullToRefresh();
-                            }}
-                            initialNumToRender={10}
-                            maxToRenderPerBatch={10}
-                            windowSize={7}
-                            removeClippedSubviews={Platform.OS === 'android'}
-                            renderItem={({ item }) => (
-                                <View style={styles.connectionRowWrap}>
-                                    <Pressable style={({ pressed }) => [styles.connectionRow, pressed && styles.connectionRowPressed]}>
-                                        <AvatarPicker
-                                            uri={item.profilePicture}
-                                            name={item.username}
-                                            size={44}
-                                            style={styles.connectionAvatarImage}
-                                            fallbackStyle={styles.connectionAvatar}
-                                            textStyle={styles.connectionAvatarText}
-                                            previewEnabled
-                                        />
-
-                                        <View style={styles.connectionRowContent}>
-                                            <Text style={styles.connectionName} numberOfLines={1}>
-                                                {item.username}
-                                            </Text>
-                                        </View>
-
-                                        <Text style={styles.connectionMessage} numberOfLines={1}>
-                                            {item.message}
-                                        </Text>
-
-                                        <Pressable
-                                            style={({ pressed }) => [styles.connectionActionButton, pressed && styles.connectionActionButtonPressed]}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={`Message ${item.username}`}
-                                            onPress={() => {
-                                                navigation.navigate('Chatroom', {
-                                                    peerId: item.id,
-                                                    peerUsername: item.username,
-                                                    peerAvatar: item.profilePicture,
-                                                });
-                                            }}
-                                        >
-                                            <Text style={styles.connectionActionButtonText}>Message</Text>
-                                        </Pressable>
-                                    </Pressable>
-                                </View>
-                            )}
-                            style={styles.list}
-                            contentContainerStyle={[
-                                styles.listContent,
-                                filteredConnections.length === 0 && styles.listContentEmpty,
-                            ]}
-                            ListEmptyComponent={
-                                <View style={styles.emptyWrap}>
-                                    {connectionsLoading ? (
-                                        <>
-                                            <ActivityIndicator size="small" color="#6733d0" />
-                                            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading connections…</Text>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Text style={styles.emptyTitle}>No accepted connections yet</Text>
-                                            <Text style={styles.emptySubtitle}>When follow requests are accepted, people will appear here.</Text>
-                                        </>
-                                    )}
-                                </View>
-                            }
-                            keyboardShouldPersistTaps="handled"
-                            showsVerticalScrollIndicator={false}
-                        />
-                    </View>
+                        )}
+                        ItemSeparatorComponent={Separator}
+                        contentContainerStyle={[
+                            { paddingTop: listTop, paddingBottom: listBottom },
+                            followRequestItems.length === 0 && s.listEmpty,
+                        ]}
+                        ListEmptyComponent={
+                            <EmptyState
+                                icon="person-add-outline"
+                                title="No follow requests yet"
+                                message="When someone sends a follow request, it will appear here instantly."
+                            />
+                        }
+                        showsVerticalScrollIndicator={false}
+                    />
                 </View>
-            </ScrollView>
-        </SafeAreaView>
+
+                {/* ── All connections ── */}
+                <View style={{ width }}>
+                    <FlatList
+                        data={filteredConnections}
+                        keyExtractor={(item) => item.id}
+                        refreshControl={refresh}
+                        initialNumToRender={10}
+                        maxToRenderPerBatch={10}
+                        windowSize={7}
+                        removeClippedSubviews={Platform.OS === 'android'}
+                        keyboardShouldPersistTaps="handled"
+                        keyboardDismissMode="on-drag"
+                        ListHeaderComponent={
+                            <SearchField
+                                value={connectionsQuery}
+                                onChangeText={setConnectionsQuery}
+                                onClear={() => setConnectionsQuery('')}
+                                placeholder="Search connections"
+                                style={s.connectionsSearch}
+                            />
+                        }
+                        renderItem={({ item, index }) => (
+                            <PressableScale
+                                onPress={() => openProfile(item)}
+                                scaleTo={1}
+                                style={[s.connectionRow, ...groupCorners(index, filteredConnections.length)]}
+                                pressedStyle={s.rowPressed}
+                                accessibilityRole="button"
+                                accessibilityLabel={`${item.username}, ${item.message}. Open profile`}
+                            >
+                                <AvatarPicker uri={item.profilePicture} name={item.username} size={44} previewEnabled={false} />
+                                <View style={s.connectionText}>
+                                    <Text style={s.connectionName} numberOfLines={1}>
+                                        {item.username}
+                                    </Text>
+                                    <Text style={s.connectionMessage} numberOfLines={1}>
+                                        {item.message}
+                                    </Text>
+                                </View>
+                                <Button
+                                    title="Message"
+                                    size="sm"
+                                    variant="tinted"
+                                    onPress={() => openChat(item)}
+                                    accessibilityLabel={`Message ${item.username}`}
+                                />
+                            </PressableScale>
+                        )}
+                        ItemSeparatorComponent={Separator}
+                        contentContainerStyle={[
+                            { paddingTop: listTop, paddingBottom: listBottom },
+                            filteredConnections.length === 0 && s.listEmpty,
+                        ]}
+                        ListEmptyComponent={
+                            connectionsLoading ? (
+                                <View style={s.loading}>
+                                    <ActivityIndicator size="small" color={colors.tintText} />
+                                    <Text style={s.loadingText}>Loading connections…</Text>
+                                </View>
+                            ) : connectionsQuery.trim() ? (
+                                <EmptyState icon="search" title="No connections found" message="Try a different search term." />
+                            ) : (
+                                <EmptyState
+                                    icon="people-outline"
+                                    title="No accepted connections yet"
+                                    message="When follow requests are accepted, people will appear here."
+                                />
+                            )
+                        }
+                        showsVerticalScrollIndicator={false}
+                    />
+                </View>
+            </Animated.ScrollView>
+
+            <NavBar
+                alwaysGlass
+                title="Notifications"
+                onBack={() => navigation.goBack()}
+                style={s.navWithControls}
+            />
+            <View style={[s.controls, { top: navHeight }]} pointerEvents="box-none">
+                <SegmentedControl
+                    segments={TAB_TITLES}
+                    selectedIndex={activeTab}
+                    onChange={goToTab}
+                    progress={pageProgress}
+                    testID="notifications-tabs"
+                />
+            </View>
+        </View>
     );
 }
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#fff',
-    },
-    header: {
-        width: '100%',
-        height: HEADER_HEIGHT,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 12,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
-    },
-    headerButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(103,51,208,0.12)',
-    },
-    headerButtonPressed: {
-        opacity: 0.75,
-    },
-    headerRightSpacer: {
-        width: 36,
-        height: 36,
-    },
-    headerText: {
-        flex: 1,
-        marginHorizontal: 12,
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111',
-        textAlign: 'center',
-    },
-    body: {
-        flex: 1,
-        paddingTop: 8,
-    },
-    tabsRow: {
-        flexDirection: 'row',
-        gap: 8,
-        paddingHorizontal: 12,
-        paddingTop: 10,
-        paddingBottom: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: '#eee',
-        backgroundColor: '#fff',
-    },
-    tabButton: {
-        flex: 1,
-        minHeight: 36,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: '#ddd',
-        backgroundColor: '#fafafa',
-        paddingHorizontal: 8,
-    },
-    tabButtonActive: {
-        borderColor: '#6733d0',
-        backgroundColor: 'rgba(103,51,208,0.12)',
-    },
-    tabButtonPressed: {
-        opacity: 0.8,
-    },
-    tabText: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#555',
-    },
-    tabTextActive: {
-        color: '#1a1073',
-    },
-    page: {
-        flex: 1,
-    },
 
-    list: {
+const useStyles = makeStyles((t) => ({
+    screen: {
         flex: 1,
-        width: '100%',
+        backgroundColor: t.colors.ground,
     },
-    listContent: {
-        paddingTop: 8,
-        paddingBottom: 14,
+    // The glass bar extends down behind the segmented control.
+    navWithControls: {
+        paddingBottom: CONTROLS_HEIGHT,
     },
-    listContentEmpty: {
+    controls: {
+        position: 'absolute',
+        left: t.space.gutter,
+        right: t.space.gutter,
+        height: CONTROLS_HEIGHT,
+        justifyContent: 'center',
+        zIndex: 11,
+    },
+    listEmpty: {
         flexGrow: 1,
         justifyContent: 'center',
     },
-
-    emptyWrap: {
-        paddingHorizontal: 16,
+    loading: {
         alignItems: 'center',
+        gap: t.space.sm,
     },
-    emptyTitle: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#111',
-        marginBottom: 6,
-        textAlign: 'center',
+    loadingText: {
+        ...t.type.footnote,
+        color: t.colors.secondaryLabel,
     },
-    emptySubtitle: {
-        fontSize: 13,
-        color: '#666',
-        textAlign: 'center',
+    groupRow: {
+        marginHorizontal: t.space.gutter,
+        overflow: 'hidden',
     },
-    placeholderWrap: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 18,
+    groupFirst: {
+        borderTopLeftRadius: t.radius.lg,
+        borderTopRightRadius: t.radius.lg,
     },
-    placeholderTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111',
-        textAlign: 'center',
-        marginBottom: 8,
+    groupLast: {
+        borderBottomLeftRadius: t.radius.lg,
+        borderBottomRightRadius: t.radius.lg,
     },
-    placeholderSubtitle: {
-        fontSize: 13,
-        color: '#666',
-        textAlign: 'center',
+    separatorWrap: {
+        marginHorizontal: t.space.gutter,
+        backgroundColor: t.colors.surface,
     },
-    connectionsSearchWrap: {
-        paddingHorizontal: 12,
-        paddingBottom: 6,
+    separator: {
+        height: t.size.hairline,
+        backgroundColor: t.colors.separator,
+        marginLeft: t.space.lg + 44 + t.space.md,
     },
-    connectionsSearchBar: {
-        width: '100%',
-        minHeight: 42,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#ddd',
-        backgroundColor: '#fafafa',
-        paddingHorizontal: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    connectionsSearchInput: {
-        flex: 1,
-        fontSize: 14,
-        color: '#111',
-        paddingVertical: 0,
-    },
-    connectionRowWrap: {
-        width: '100%',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
+    connectionsSearch: {
+        marginHorizontal: t.space.gutter,
+        marginBottom: t.space.md,
     },
     connectionRow: {
-        width: '100%',
-        minHeight: 64,
-        borderRadius: 14,
-        borderWidth: 1,
-        borderColor: '#eee',
-        backgroundColor: '#fff',
-        paddingHorizontal: 12,
         flexDirection: 'row',
         alignItems: 'center',
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
+        gap: t.space.md,
+        paddingHorizontal: t.space.lg,
+        paddingVertical: t.space.md,
+        backgroundColor: t.colors.surface,
     },
-    connectionRowPressed: {
-        backgroundColor: 'rgba(233,226,255,0.40)',
+    rowPressed: {
+        backgroundColor: t.colors.pressedOverlay,
     },
-    connectionAvatar: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
-        backgroundColor: '#e9e2ff',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 10,
-    },
-    connectionAvatarImage: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
-        marginRight: 10,
-        backgroundColor: '#e9e2ff',
-    },
-    connectionAvatarText: {
-        color: '#350d81',
-        fontSize: 15,
-        fontWeight: '700',
-    },
-    connectionRowContent: {
+    connectionText: {
         flex: 1,
         minWidth: 0,
-        marginRight: 8,
+        gap: 1,
     },
     connectionName: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#111',
+        ...t.type.headline,
+        color: t.colors.label,
     },
     connectionMessage: {
-        fontSize: 12,
-        color: '#666',
-        marginRight: 10,
+        ...t.type.footnote,
+        color: t.colors.secondaryLabel,
     },
-    connectionActionButton: {
-        minHeight: 32,
-        borderRadius: 9,
-        borderWidth: 1,
-        borderColor: '#6733d0',
-        backgroundColor: 'rgba(103,51,208,0.10)',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 10,
-    },
-    connectionActionButtonPressed: {
-        opacity: 0.8,
-    },
-    connectionActionButtonText: {
-        fontSize: 12,
-        color: '#1a1073',
-        fontWeight: '700',
-    },
+}));
 
-})
 export default Notifications;
