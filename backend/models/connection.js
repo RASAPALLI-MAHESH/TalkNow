@@ -61,12 +61,6 @@ const connectionSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
-        lastMessagePreview: {
-            type: String,
-            default: '',
-            maxlength: 500,
-            trim: true,
-        },
     },
     { timestamps: true }
 );

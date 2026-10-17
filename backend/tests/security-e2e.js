@@ -6,6 +6,7 @@
 
   Boots the server in-process on port 18080 with a fresh database (dropped at the end),
   stubs Expo's push API and email sending, and exits non-zero if any check fails.
+  Messages are encrypted and decrypted with the app's own crypto code (services/crypto).
   Set TEST_FERRETDB=1 when running against FerretDB, which lacks arrayFilters.
 */
 process.env.PORT = '18080';
@@ -77,18 +78,71 @@ if (process.env.TEST_FERRETDB === '1') Connection.updateOne = (filter, update, o
 };
 
 const BASE = 'http://127.0.0.1:18080/api/auth';
+const KEYS = 'http://127.0.0.1:18080/api/keys';
 const WS_URL = 'ws://127.0.0.1:18080/ws';
 let ipCounter = 1;
 const freshIp = () => `10.0.${Math.floor(ipCounter / 250)}.${(ipCounter++ % 250) + 1}`;
 
-const api = async (method, route, body, { token, ip } = {}) => {
+const request = async (base, method, route, body, { token, ip } = {}) => {
     const headers = { 'Content-Type': 'application/json', 'X-Forwarded-For': ip || freshIp() };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(BASE + route, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const res = await fetch(base + route, { method, headers, body: body ? JSON.stringify(body) : undefined });
     let data = null;
     try { data = await res.json(); } catch {}
     return { status: res.status, data };
 };
+const api = (...args) => request(BASE, ...args);
+const keysApi = (...args) => request(KEYS, ...args);
+
+// The phone's crypto, loaded from TypeScript.
+require(require.resolve('tsx/cjs/api', { paths: [ROOT] })).register();
+const E2E = require(path.join(ROOT, 'services/crypto/index.ts'));
+const { MemorySignalStore } = require(path.join(ROOT, 'services/crypto/memoryStore.ts'));
+const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+
+// A phone install: keys kept in memory, public parts ready for PUT /api/keys.
+const makeDevice = (opkCount = 40) => {
+    const identity = E2E.generateIdentity();
+    const store = new MemorySignalStore(identity, E2E.generateRegistrationId());
+    const spk = E2E.generateSignedPreKey(identity, 1);
+    store.signedPreKeys.set(spk.keyId, spk);
+    const opks = E2E.generateOneTimePreKeys(1, opkCount);
+    for (const k of opks) store.oneTimePreKeys.set(k.keyId, k);
+    return {
+        store,
+        upload: {
+            registrationId: store.registrationId,
+            identityKey: b64(identity.signing.publicKey),
+            identityDhKey: b64(identity.dh.publicKey),
+            identityDhSignature: b64(identity.dhSignature),
+            signedPreKey: { keyId: spk.keyId, publicKey: b64(spk.keyPair.publicKey), signature: b64(spk.signature) },
+            oneTimePreKeys: opks.map((k) => ({ keyId: k.keyId, publicKey: b64(k.keyPair.publicKey) })),
+        },
+    };
+};
+const publishKeys = async (device, token) => keysApi('PUT', '', device.upload, { token });
+
+// Encrypts like the app: fetches the contact's bundle the first time, then uses the ratchet.
+const encryptFor = async (device, token, peerId, text, extra = {}) => {
+    let record = (await device.store.getSessionRecord(peerId)) ?? E2E.emptyRecord();
+    if (!record.active) {
+        const r = await keysApi('GET', '/' + peerId, null, { token });
+        if (r.status !== 200) throw new Error(`bundle fetch failed: ${r.status} ${JSON.stringify(r.data)}`);
+        const started = await E2E.startSession(device.store, peerId, E2E.parsePreKeyBundle(r.data));
+        record = started.record;
+        await device.store.commit({ peerId, record, remoteIdentity: started.remoteIdentity });
+    }
+    const { envelope, commit } = await E2E.encryptMessage(device.store, peerId, record, { v: 1, type: 'text', text, ...extra });
+    await device.store.commit(commit);
+    return envelope;
+};
+const decryptFrom = async (device, peerId, envelope) => {
+    const result = await E2E.decryptMessage(device.store, peerId, envelope);
+    await device.store.commit(result.commit);
+    return { text: result.payload?.text, identityStatus: result.identityStatus };
+};
+// Shape-valid ciphertext the server can't tell apart from a real one.
+const dummyEnvelope = (recipientRegistrationId) => ({ type: 'whisper', body: b64(testCrypto.randomBytes(96)), registrationId: 7, recipientRegistrationId });
 
 let passed = 0, failed = 0;
 const check = (name, cond, extra) => {
@@ -239,9 +293,15 @@ const signupUser = async (email, username) => {
         requestedBy: alice.id, requestedTo: carol.id, status: 'accepted',
     });
 
+    const aliceDevice = makeDevice();
+    const carolDevice = makeDevice();
+    r = await publishKeys(aliceDevice, alice.token);
+    check('keys published', r.status === 200 && r.data.oneTimePreKeyCount === 40, r);
+    r = await publishKeys(carolDevice, carol.token);
+
     const anon = await openSocket();
     anon.send(JSON.stringify({ type: 'register', userId: carol.id }));
-    anon.send(JSON.stringify({ type: 'send_message', from: carol.id, to: alice.id, content: 'spoof' }));
+    anon.send(JSON.stringify({ type: 'send_message', from: carol.id, to: alice.id, envelope: dummyEnvelope(aliceDevice.store.registrationId) }));
     await sleep(300);
     check('old register-by-userId no longer works', anon.inbox.every((m) => m.type === 'error') && !anon.inbox.some((m) => m.type === 'registered'), anon.inbox);
     anon.close();
@@ -256,21 +316,28 @@ const signupUser = async (email, username) => {
     const c1 = await authSocket(carol.token);
     check('valid tokens authenticate', a1.ok && a2.ok && c1.ok);
 
-    a1.ws.send(JSON.stringify({ type: 'send_message', from: carol.id, to: carol.id, content: 'hi', clientId: 'x1' }));
-    const got = await waitFor(c1.ws, (m) => m.type === 'new_message' && m.content === 'hi');
+    a1.ws.send(JSON.stringify({ type: 'send_message', from: carol.id, to: carol.id, envelope: await encryptFor(aliceDevice, alice.token, carol.id, 'hi'), clientId: 'x1' }));
+    const got = await waitFor(c1.ws, (m) => m.type === 'new_message');
     check('sender comes from token, not the "from" field', got && got.from === alice.id, got);
+    check('recipient decrypts the first (prekey) message', got && got.envelope.type === 'prekey' && (await decryptFrom(carolDevice, alice.id, got.envelope)).text === 'hi', got);
 
-    c1.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, content: 'to both' }));
-    const g1 = await waitFor(a1.ws, (m) => m.content === 'to both');
-    const g2 = await waitFor(a2.ws, (m) => m.content === 'to both');
-    check('all of a user\'s sockets receive messages', g1 && g2);
+    const toBoth = await encryptFor(carolDevice, carol.token, alice.id, 'to both');
+    c1.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: toBoth }));
+    const g1 = await waitFor(a1.ws, (m) => m.type === 'new_message');
+    const g2 = await waitFor(a2.ws, (m) => m.type === 'new_message');
+    check('all of a user\'s sockets receive messages', g1 && g2 && g1.id === g2.id && g1.envelope.body === toBoth.body);
+    check('reply decrypts', g1 && (await decryptFrom(aliceDevice, carol.id, g1.envelope)).text === 'to both');
     a1.ws.close();
     await sleep(200);
-    c1.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, content: 'after close' }));
-    check('closing one socket does not orphan the others', await waitFor(a2.ws, (m) => m.content === 'after close'));
+    c1.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: await encryptFor(carolDevice, carol.token, alice.id, 'after close') }));
+    const afterClose = await waitFor(a2.ws, (m) => m.type === 'new_message' && m.id !== g2.id);
+    check('closing one socket does not orphan the others', afterClose && (await decryptFrom(aliceDevice, carol.id, afterClose.envelope)).text === 'after close');
+    // Like the app: acknowledge what was stored so the server drops the ciphertext.
+    a2.ws.send(JSON.stringify({ type: 'ack', ids: [g2.id, afterClose.id] }));
+    c1.ws.send(JSON.stringify({ type: 'ack', ids: [got.id] }));
 
-    c1.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, content: 'x'.repeat(4001) }));
-    check('oversized message rejected', await waitFor(c1.ws, (m) => m.type === 'error' && /too long/.test(m.message)));
+    c1.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: { ...dummyEnvelope(aliceDevice.store.registrationId), body: 'A'.repeat(48 * 1024 + 4) }, clientId: 'big' }));
+    check('oversized message rejected', await waitFor(c1.ws, (m) => m.type === 'error' && m.code === 'invalid_envelope' && m.clientId === 'big'));
 
     console.info('\nLogout');
     r = await api('POST', '/logout', null, { token: aliceToken2 });
@@ -281,6 +348,154 @@ const signupUser = async (email, username) => {
     check('logged-out session socket closed', a2.ws.closeCode === 4001, a2.ws.closeCode);
     r = await api('GET', '/profile', null, { token: alice.token });
     check('other session unaffected', r.status === 200, r);
+
+    console.info('\nEnd-to-end encryption');
+    const KeyBundle = require(path.join(ROOT, 'backend/models/keyBundle'));
+    const MessageModel = require(path.join(ROOT, 'backend/models/message'));
+    const health = await (await fetch('http://127.0.0.1:18080/api/health')).json();
+    check('health reports the minimum app version', /^\d+\.\d+\.\d+$/.test(health.minAppVersion), health);
+
+    const forgedSpk = makeDevice();
+    forgedSpk.upload.signedPreKey.signature = makeDevice().upload.signedPreKey.signature;
+    r = await keysApi('PUT', '', forgedSpk.upload, { token: alice.token });
+    check('signed prekey with a bad signature rejected', r.status === 400, r);
+    const forgedDh = makeDevice();
+    forgedDh.upload.identityDhKey = makeDevice().upload.identityDhKey;
+    r = await keysApi('PUT', '', forgedDh.upload, { token: alice.token });
+    check("identity DH key not signed by the identity rejected", r.status === 400, r);
+    const sloppy = makeDevice();
+    sloppy.upload.identityKey = sloppy.upload.identityKey.replace(/=$/, '');
+    r = await keysApi('PUT', '', sloppy.upload, { token: alice.token });
+    check('non-canonical base64 rejected', r.status === 400, r);
+    r = await keysApi('PUT', '', aliceDevice.upload, {});
+    check('key upload needs a session', r.status === 401, r);
+    r = await keysApi('GET', '/me', null, { token: alice.token });
+    check('own key status reflects this install', r.status === 200 && r.data.registrationId === aliceDevice.store.registrationId, r);
+
+    const frank = await signupUser('frank@example.com', 'frank');
+    await publishKeys(makeDevice(), frank.token);
+    r = await keysApi('GET', '/' + frank.id, null, { token: alice.token });
+    check("strangers can't fetch each other's keys", r.status === 404, r);
+    r = await keysApi('GET', '/' + carol.id, null, { token: alice.token });
+    let parsedOk = true;
+    try { E2E.parsePreKeyBundle(r.data); } catch { parsedOk = false; }
+    check('bundle for a connection verifies on the phone', r.status === 200 && parsedOk && r.data.oneTimePreKey, r);
+    const before = (await KeyBundle.findOne({ userId: carol.id }).lean()).oneTimePreKeys.length;
+    const parallelBundles = await Promise.all(Array.from({ length: 20 }, () => keysApi('GET', '/' + carol.id, null, { token: alice.token })));
+    const handedOut = parallelBundles.map((x) => x.data?.oneTimePreKey?.keyId);
+    const after = (await KeyBundle.findOne({ userId: carol.id }).lean()).oneTimePreKeys.length;
+    check('one-time prekeys never handed out twice under parallel requests', new Set(handedOut).size === 20 && !handedOut.includes(undefined) && before - after === 20, { handedOut, before, after });
+    const c2 = await authSocket(carol.token);
+    await KeyBundle.updateOne({ userId: carol.id }, { $set: { oneTimePreKeys: [] } });
+    r = await keysApi('GET', '/' + carol.id, null, { token: alice.token });
+    check('an empty prekey list still gives a usable bundle', r.status === 200 && r.data.oneTimePreKey === null && r.data.signedPreKey, r.data);
+    check('owner told when prekeys run low', await waitFor(c2.ws, (m) => m.type === 'prekeys_low' && m.count === 0));
+    const topUp = E2E.generateOneTimePreKeys(41, 30).map((k) => ({ keyId: k.keyId, publicKey: b64(k.keyPair.publicKey) }));
+    r = await keysApi('POST', '/prekeys', { registrationId: carolDevice.store.registrationId, oneTimePreKeys: topUp }, { token: carol.token });
+    check('prekeys topped up', r.status === 200 && r.data.oneTimePreKeyCount === 30, r);
+    r = await keysApi('POST', '/prekeys', { registrationId: 12345, oneTimePreKeys: topUp }, { token: carol.token });
+    check('top-up from a replaced install refused', r.status === 409, r);
+    const carolIdentity = carolDevice.store.identity;
+    const spk2 = E2E.generateSignedPreKey(carolIdentity, 2);
+    r = await keysApi('PUT', '/signed-prekey', { registrationId: carolDevice.store.registrationId, signedPreKey: { keyId: 2, publicKey: b64(spk2.keyPair.publicKey), signature: b64(spk2.signature) } }, { token: carol.token });
+    check('signed prekey rotated', r.status === 200, r);
+    carolDevice.store.signedPreKeys.set(2, spk2);
+    const notCarols = E2E.generateSignedPreKey(E2E.generateIdentity(), 3);
+    r = await keysApi('PUT', '/signed-prekey', { registrationId: carolDevice.store.registrationId, signedPreKey: { keyId: 3, publicKey: b64(notCarols.keyPair.publicKey), signature: b64(notCarols.signature) } }, { token: carol.token });
+    check('signed prekey signed by another identity refused', r.status === 400, r);
+
+    c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, content: 'plain words', clientId: 'p1' }));
+    const plainErr = await waitFor(c2.ws, (m) => m.type === 'error' && m.clientId === 'p1');
+    check('plain-text messages refused with update_required', plainErr?.code === 'update_required', plainErr);
+    check('refused plain text not stored', !(await MessageModel.exists({ content: 'plain words' })));
+    c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: dummyEnvelope(999), clientId: 'stale' }));
+    const staleErr = await waitFor(c2.ws, (m) => m.type === 'error' && m.clientId === 'stale');
+    check('message for a replaced install refused', staleErr?.code === 'recipient_keys_changed', staleErr);
+
+    // Alice is offline (both sockets closed): messages wait as ciphertext.
+    const secrets = ['secret one', 'secret two', 'secret three'];
+    const sentIds = [];
+    for (const [i, text] of secrets.entries()) {
+        c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: await encryptFor(carolDevice, carol.token, alice.id, text), clientId: `s${i}` }));
+        const ack = await waitFor(c2.ws, (m) => m.type === 'sent' && m.clientId === `s${i}`);
+        sentIds.push(ack?.id);
+    }
+    check('sender gets server ids for queued messages', sentIds.every(Boolean), sentIds);
+    const sentAck = c2.ws.inbox.find((m) => m.type === 'sent' && m.clientId === 's0');
+    check('send ack echoes no content', sentAck && sentAck.envelope === undefined && sentAck.content === undefined, sentAck);
+    const dump = JSON.stringify(await mongoose.connection.db.collection('messages').find({}).toArray());
+    check('database holds no message text', !secrets.some((t) => dump.includes(t)) && !dump.includes('to both'));
+    const connDump = JSON.stringify(await mongoose.connection.db.collection('connections').find({}).toArray());
+    check('conversations store no preview', !connDump.includes('lastMessagePreview') && !connDump.includes('secret'));
+    const queued = await MessageModel.findById(sentIds[0]).lean();
+    check('stored as an encrypted envelope', queued.encrypted === true && queued.envelope?.body && queued.content === undefined, queued);
+
+    r = await api('GET', '/messages/pending', null, { token: alice.token });
+    const pendingIds = (r.data?.messages || []).map((m) => m.id);
+    check('pending queue returns the envelopes oldest first', r.status === 200 && JSON.stringify(pendingIds) === JSON.stringify(sentIds), { pendingIds, sentIds });
+    const opened = [];
+    for (const m of r.data.messages) opened.push((await decryptFrom(aliceDevice, carol.id, m.envelope)).text);
+    check('offline messages decrypt in order', JSON.stringify(opened) === JSON.stringify(secrets), opened);
+    r = await api('GET', '/messages/with/' + carol.id, null, { token: alice.token });
+    const historyRow = r.data?.messages?.find((m) => m.id === sentIds[0]);
+    check('history endpoint returns metadata only', historyRow && historyRow.encrypted === true && historyRow.text === undefined && historyRow.envelope === undefined && historyRow.clientId === undefined, historyRow);
+    r = await api('GET', '/messages/with/' + alice.id, null, { token: carol.token });
+    check("sender's history carries its client id (to match lost acks)", r.data?.messages?.find((m) => m.id === sentIds[0])?.clientId === 's0', r.data?.messages?.[0]);
+    r = await api('POST', '/messages/ack', { ids: sentIds }, { token: carol.token });
+    check("can't acknowledge someone else's messages", r.status === 200 && r.data.acknowledged === 0 && (await MessageModel.findById(sentIds[0]).lean()).envelope, r);
+    r = await api('POST', '/messages/ack', { ids: sentIds }, { token: alice.token });
+    check('ack accepted', r.status === 200 && r.data.acknowledged === 3, r);
+    const deliveredIds = new Set();
+    for (const id of sentIds) if (await waitFor(c2.ws, (m) => m.type === 'message_status' && m.status === 'delivered' && m.id === id)) deliveredIds.add(id);
+    check('sender told each message was delivered', deliveredIds.size === 3, [...deliveredIds]);
+    const ackedDoc = await MessageModel.findById(sentIds[0]).lean();
+    check('ciphertext deleted from the server after ack', !ackedDoc.envelope && ackedDoc.ackedAt && ackedDoc.deliveredAt, ackedDoc);
+    r = await api('GET', '/messages/pending', null, { token: alice.token });
+    check('pending queue empty after ack', r.data?.messages?.length === 0, r.data);
+
+    const aLive = await authSocket(alice.token);
+    c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: await encryptFor(carolDevice, carol.token, alice.id, 'live one') }));
+    const live = await waitFor(aLive.ws, (m) => m.type === 'new_message');
+    check('live message decrypts', live && (await decryptFrom(aliceDevice, carol.id, live.envelope)).text === 'live one');
+    aLive.ws.send(JSON.stringify({ type: 'ack', ids: [live.id] }));
+    check('ack over the socket marks delivered', await waitFor(c2.ws, (m) => m.type === 'message_status' && m.status === 'delivered' && m.id === live.id));
+    await sleep(100);
+    check('socket ack deletes the ciphertext', !(await MessageModel.findById(live.id).lean()).envelope);
+
+    const pairAC = [alice.id, carol.id].sort().join(':');
+    const unreadOf = async (uid) => (await Connection.findOne({ pairKey: pairAC }).lean()).participants.find((p) => String(p.userId) === uid).unreadCount;
+    const unreadBefore = await unreadOf(alice.id);
+    c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, resendOf: sentIds[1], envelope: await encryptFor(carolDevice, carol.token, alice.id, 'secret two', { resendOf: sentIds[1] }) }));
+    const resent = await waitFor(aLive.ws, (m) => m.type === 'new_message' && m.resendOf === sentIds[1]);
+    check('re-sent message carries what it replaces', !!resent, resent);
+    check("a re-send doesn't count as a new unread message", (await unreadOf(alice.id)) === unreadBefore, { before: unreadBefore, after: await unreadOf(alice.id) });
+    await decryptFrom(aliceDevice, carol.id, resent.envelope);
+
+    aLive.ws.send(JSON.stringify({ type: 'session_reset', to: carol.id, messageIds: [sentIds[2], live.id, frank.id] }));
+    const resetMsg = await waitFor(c2.ws, (m) => m.type === 'session_reset');
+    check('session reset reaches the sender with only their message ids', resetMsg && resetMsg.from === alice.id && JSON.stringify(resetMsg.messageIds.sort()) === JSON.stringify([sentIds[2], live.id].sort()), resetMsg);
+    r = await api('GET', '/messages/pending', null, { token: carol.token });
+    check('reset request also waits in the pending queue', r.data?.resets?.some((x) => x.id === resetMsg?.id), r.data);
+    r = await api('POST', '/messages/ack', { resetIds: [resetMsg.id] }, { token: carol.token });
+    r = await api('GET', '/messages/pending', null, { token: carol.token });
+    check('handled reset removed', r.data?.resets?.length === 0, r.data);
+
+    // Alice reinstalls: new keys. Carol is told, and old-install messages are refused until she refreshes.
+    const aliceNewPhone = makeDevice();
+    r = await publishKeys(aliceNewPhone, alice.token);
+    check('new install replaces the bundle and reports the change', r.status === 200 && r.data.identityChanged === true, r);
+    check('connections told about the new keys', await waitFor(c2.ws, (m) => m.type === 'identity_changed' && m.userId === alice.id));
+    c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: await encryptFor(carolDevice, carol.token, alice.id, 'to old phone'), clientId: 'old' }));
+    check('message to the old install refused', (await waitFor(c2.ws, (m) => m.type === 'error' && m.clientId === 'old'))?.code === 'recipient_keys_changed');
+    const rec = await carolDevice.store.getSessionRecord(alice.id);
+    await carolDevice.store.commit({ peerId: alice.id, record: E2E.archiveActiveSession(rec) });
+    c2.ws.send(JSON.stringify({ type: 'send_message', to: alice.id, envelope: await encryptFor(carolDevice, carol.token, alice.id, 'to new phone'), clientId: 'new' }));
+    const toNew = await waitFor(aLive.ws, (m) => m.type === 'new_message' && m.envelope?.recipientRegistrationId === aliceNewPhone.store.registrationId);
+    const openedNew = toNew && (await decryptFrom(aliceNewPhone, carol.id, toNew.envelope));
+    check('new install decrypts after the sender refreshes keys', openedNew?.text === 'to new phone', openedNew);
+    check("new phone sees the contact's key as first seen", openedNew?.identityStatus?.firstSeen === true, openedNew);
+    aLive.ws.close();
+    c2.ws.close();
 
     console.info('\nProfile validation');
     r = await api('PUT', '/updateProfile', { socialUrls: { instagram: 'javascript:alert(1)' } }, { token: alice.token });
@@ -401,8 +616,10 @@ const signupUser = async (email, username) => {
     check('block succeeds', r.status === 200 && r.data.relationship === 'blocked', r);
     check('block removes the connection', !(await Connection.exists({ pairKey: [alice.id, carol.id].sort().join(':') })));
     // (The inbox lists accepted connections only; FerretDB can't run its $lookup, so it isn't called here.)
+    r = await keysApi('GET', '/' + carol.id, null, { token: alice.token });
+    check("blocked user can't fetch the blocker's keys", r.status === 404, r);
     const aliceWs = await authSocket(alice.token);
-    aliceWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, content: 'hello?', clientId: 'tmp_1' }));
+    aliceWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, envelope: dummyEnvelope(carolDevice.store.registrationId), clientId: 'tmp_1' }));
     const sendErr = await waitFor(aliceWs.ws, (m) => m.type === 'error');
     check('message to blocker fails with its client id', sendErr && sendErr.clientId === 'tmp_1', sendErr);
     r = await api('GET', '/profile/' + carol.id, null, { token: alice.token });
@@ -446,7 +663,7 @@ const signupUser = async (email, username) => {
         { $set: { status: 'accepted', participants: [{ userId: new mongoose.Types.ObjectId(alice.id) }, { userId: new mongoose.Types.ObjectId(carol.id) }] } }
     );
     pushes.length = 0;
-    aliceWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, content: 'top secret plan', clientId: 'tmp_2' }));
+    aliceWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, envelope: await encryptFor(aliceNewPhone, alice.token, carol.id, 'top secret plan'), clientId: 'tmp_2' }));
     await waitFor(aliceWs.ws, (m) => m.type === 'sent');
     await sleep(300);
     const msgPush = pushes.find((p) => p.to === 'ExponentPushToken[carolphone]');
@@ -465,15 +682,16 @@ const signupUser = async (email, username) => {
     r = await api('POST', '/signup', { Firstname: 'E', email: 'erin@example.com', username: 'erin', password: PASSWORD, otp: otps['erin@example.com'], profilePicture: `data:image/png;base64,${PNG}` });
     const erin = { token: r.data.token, id: String(r.data.user.id), avatar: r.data.user.profilePicture };
     await Connection.create({ pairKey: [erin.id, carol.id].sort().join(':'), participants: [{ userId: erin.id }, { userId: carol.id }], requestedBy: erin.id, requestedTo: carol.id, status: 'accepted' });
+    const erinDevice = makeDevice();
+    await publishKeys(erinDevice, erin.token);
     const erinWs = await authSocket(erin.token);
-    erinWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, content: 'bye', clientId: 'e1' }));
+    erinWs.ws.send(JSON.stringify({ type: 'send_message', to: carol.id, envelope: await encryptFor(erinDevice, erin.token, carol.id, 'bye'), clientId: 'e1' }));
     await waitFor(erinWs.ws, (m) => m.type === 'sent');
     await api('POST', '/follow', { targetUserId: dave.id }, { token: erin.token });
     r = await api('DELETE', '/account', { password: WRONG_PASSWORD }, { token: erin.token });
     check('wrong password refused with 403 (not 401)', r.status === 403, r);
     r = await api('DELETE', '/account', { password: PASSWORD }, { token: erin.token });
     check('account deleted', r.status === 200, r);
-    const MessageModel = require(path.join(ROOT, 'backend/models/message'));
     const NotificationModel = require(path.join(ROOT, 'backend/models/notification'));
     const leftovers = {
         user: await User.exists({ _id: erin.id }),
@@ -482,6 +700,7 @@ const signupUser = async (email, username) => {
         connections: await Connection.exists({ 'participants.userId': erin.id }),
         notifications: await NotificationModel.exists({ $or: [{ toUserId: erin.id }, { fromUserId: erin.id }] }),
         media: await mongoose.connection.db.collection('media').countDocuments({ ownerId: new mongoose.Types.ObjectId(erin.id) }),
+        keys: await KeyBundle.exists({ userId: erin.id }),
     };
     check('all of the account data is gone', Object.values(leftovers).every((v) => !v), leftovers);
     img = await fetch(erin.avatar);

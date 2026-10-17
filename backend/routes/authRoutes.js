@@ -30,6 +30,8 @@ const {
 const { getNotifications, getUnreadCount, deleteNotification } = require("../utils/notificationFunctions");
 const { markAsRead, getTotalUnread } = require('../services/messageService');
 const { blockUser, unblockUser, listBlockedUsers, reportUser } = require('../utils/safetyFunctions');
+const { listPending, acknowledgeMessages, acknowledgeResets } = require('../services/e2eeMessaging');
+const { emitDeliveryStatuses } = require('../services/websocketServer');
 const { isValidObjectId } = require("../utils/identityUtils");
 // Signup Flow
 router.post("/send-signup-otp", credentialLimiter, authController.sendSignupOtp);
@@ -75,6 +77,29 @@ router.post('/messages/read', authMiddleware, async (req, res) => {
         res.status(200).json({ message: 'Marked as read' });
     } catch (err) {
         console.error('Error marking as read:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+// Encrypted messages and session-reset requests waiting for this phone, oldest first.
+router.get('/messages/pending', authMiddleware, async (req, res) => {
+    try {
+        const limitRaw = Number.parseInt(String(req.query?.limit ?? ''), 10);
+        const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 100;
+        res.status(200).json(await listPending(req.user.id, limit));
+    } catch (err) {
+        console.error('Error listing pending messages:', err);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+});
+// The phone stored these: the server deletes their ciphertext and marks them delivered.
+router.post('/messages/ack', authMiddleware, async (req, res) => {
+    try {
+        const delivered = await acknowledgeMessages(req.user.id, req.body?.ids);
+        emitDeliveryStatuses(delivered);
+        const resets = await acknowledgeResets(req.user.id, req.body?.resetIds);
+        res.status(200).json({ acknowledged: delivered.length, resets });
+    } catch (err) {
+        console.error('Error acknowledging messages:', err);
         res.status(500).json({ message: 'Internal server error' });
     }
 });

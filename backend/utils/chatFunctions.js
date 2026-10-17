@@ -81,7 +81,6 @@ const getInbox = async (req, res) => {
                 $project: {
                     pairKey: 1,
                     lastMessageAt: 1,
-                    lastMessagePreview: 1,
                     unreadCount: "$me.unreadCount",
                     peer: { $arrayElemAt: ['$peerDocs', 0] },
                 },
@@ -94,9 +93,8 @@ const getInbox = async (req, res) => {
                 id: String(row.peer._id),
                 username: toSafeUsername(row.peer.username),
                 profilePicture: typeof row.peer.profilePicture === 'string' ? row.peer.profilePicture : '',
-                lastMessage: typeof row.lastMessagePreview === 'string' && row.lastMessagePreview.trim()
-                    ? row.lastMessagePreview
-                    : 'New message',
+                // Messages are end-to-end encrypted: the phone shows the preview from its own store.
+                lastMessage: '',
                 date: row.lastMessageAt ? new Date(row.lastMessageAt).toISOString() : '',
                 conversationKey: String(row.pairKey || ''),
                 unreadCount: row.unreadCount || 0,
@@ -128,19 +126,23 @@ const getConversationMessages = async (req, res) => {
         const beforeDate = beforeRaw ? new Date(beforeRaw) : null;
         const beforeFilter = beforeDate && !Number.isNaN(beforeDate.getTime()) ? { createdAt: { $lt: beforeDate } } : {};
 
+        // Metadata only (and the text of legacy plain-text messages): encrypted content lives on the phones.
         const docs = await Message.find({
             conversationKey: pair.pairKey,
             ...beforeFilter,
         })
             .sort({ createdAt: -1 })
             .limit(limit)
+            .select('-envelope')
             .lean();
 
         const messages = docs
             .map((m) => ({
                 id: String(m._id),
-                text: String(m.content ?? ''),
+                encrypted: !!m.encrypted,
+                text: m.encrypted ? undefined : String(m.content ?? ''),
                 sender: String(m.senderId) === userId ? 'me' : 'other',
+                clientId: String(m.senderId) === userId && m.clientId ? m.clientId : undefined,
                 status:
                     String(m.senderId) === userId
                         ? (m.readAt ? 'read' : (m.deliveredAt ? 'delivered' : 'sent'))

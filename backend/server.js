@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 const mediaRoutes = require("./routes/mediaRoutes");
+const keyRoutes = require("./routes/keyRoutes");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
@@ -101,10 +102,14 @@ server.use(express.urlencoded({ extended: true, limit: '8mb' }));
 
 server.use("/api/auth", authRoutes)
 server.use("/api/media", mediaLimiter, mediaRoutes)
+server.use("/api/keys", keyRoutes)
+
+// Older apps send plain text, which the server no longer accepts: they are asked to update.
+const MIN_APP_VERSION = String(process.env.MIN_APP_VERSION || '1.1.0').trim();
 
 server.get(
     "/api/health", (req , res) => {
-        res.status(200).json({ status: "API RUNNING v1.0 [PRODUCTION-READY]" });
+        res.status(200).json({ status: "API RUNNING v1.0 [PRODUCTION-READY]", minAppVersion: MIN_APP_VERSION });
     }
 )
 
