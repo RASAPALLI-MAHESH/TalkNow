@@ -19,7 +19,7 @@ import FollowRequestComponent from './followRequestComponent';
 import FollowRequestNotification from './followrequestNotification';
 
 const HEADER_HEIGHT = 56;
-const TAB_TITLES = ['Notifications', 'Follow requests', 'All collections'] as const;
+const TAB_TITLES = ['Notifications', 'Follow requests', 'All connections'] as const;
 
 const LAST_SEEN_KEY = 'notificationsLastSeenAt';
 
@@ -64,7 +64,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     const [followActionPendingById, setFollowActionPendingById] = useState<Record<string, boolean>>({});
     const [connections, setConnections] = useState<MutualConnectionItem[]>([]);
     const [connectionsLoading, setConnectionsLoading] = useState(false);
-    const [collectionsQuery, setCollectionsQuery] = useState('');
+    const [connectionsQuery, setConnectionsQuery] = useState('');
     const [refreshing, setRefreshing] = useState(false);
     const { width } = useWindowDimensions();
 
@@ -76,14 +76,14 @@ const Notifications = ({ navigation }: { navigation: any }) => {
     }, [items]);
 
     const filteredConnections = useMemo(() => {
-        const q = collectionsQuery.trim().toLowerCase();
+        const q = connectionsQuery.trim().toLowerCase();
         if (!q) return connections;
         return connections.filter((item) => {
             const username = String(item.username || '').toLowerCase();
             const message = String(item.message || '').toLowerCase();
             return username.includes(q) || message.includes(q);
         });
-    }, [collectionsQuery, connections]);
+    }, [connectionsQuery, connections]);
 
     const goToTab = (index: number) => {
         setActiveTab(index);
@@ -407,15 +407,15 @@ const Notifications = ({ navigation }: { navigation: any }) => {
 
                 <View style={[styles.page, { width }]}>
                     <View style={styles.body}>
-                        <View style={styles.collectionsSearchWrap}>
-                            <View style={styles.collectionsSearchBar}>
+                        <View style={styles.connectionsSearchWrap}>
+                            <View style={styles.connectionsSearchBar}>
                                 <Ionicons name="search" size={18} color="#6733d0" />
                                 <TextInput
-                                    value={collectionsQuery}
-                                    onChangeText={setCollectionsQuery}
-                                    placeholder="Search collections"
+                                    value={connectionsQuery}
+                                    onChangeText={setConnectionsQuery}
+                                    placeholder="Search connections"
                                     placeholderTextColor="#8b79b7"
-                                    style={styles.collectionsSearchInput}
+                                    style={styles.connectionsSearchInput}
                                     autoCapitalize="none"
                                     autoCorrect={false}
                                 />
@@ -434,30 +434,30 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                             windowSize={7}
                             removeClippedSubviews={Platform.OS === 'android'}
                             renderItem={({ item }) => (
-                                <View style={styles.collectionRowWrap}>
-                                    <Pressable style={({ pressed }) => [styles.collectionRow, pressed && styles.collectionRowPressed]}>
+                                <View style={styles.connectionRowWrap}>
+                                    <Pressable style={({ pressed }) => [styles.connectionRow, pressed && styles.connectionRowPressed]}>
                                         <AvatarPicker
                                             uri={item.profilePicture}
                                             name={item.username}
                                             size={44}
-                                            style={styles.collectionAvatarImage}
-                                            fallbackStyle={styles.collectionAvatar}
-                                            textStyle={styles.collectionAvatarText}
+                                            style={styles.connectionAvatarImage}
+                                            fallbackStyle={styles.connectionAvatar}
+                                            textStyle={styles.connectionAvatarText}
                                             previewEnabled
                                         />
 
-                                        <View style={styles.collectionRowContent}>
-                                            <Text style={styles.collectionName} numberOfLines={1}>
+                                        <View style={styles.connectionRowContent}>
+                                            <Text style={styles.connectionName} numberOfLines={1}>
                                                 {item.username}
                                             </Text>
                                         </View>
 
-                                        <Text style={styles.collectionMessage} numberOfLines={1}>
+                                        <Text style={styles.connectionMessage} numberOfLines={1}>
                                             {item.message}
                                         </Text>
 
                                         <Pressable
-                                            style={({ pressed }) => [styles.collectionActionButton, pressed && styles.collectionActionButtonPressed]}
+                                            style={({ pressed }) => [styles.connectionActionButton, pressed && styles.connectionActionButtonPressed]}
                                             accessibilityRole="button"
                                             accessibilityLabel={`Message ${item.username}`}
                                             onPress={() => {
@@ -468,7 +468,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                                                 });
                                             }}
                                         >
-                                            <Text style={styles.collectionActionButtonText}>Message</Text>
+                                            <Text style={styles.connectionActionButtonText}>Message</Text>
                                         </Pressable>
                                     </Pressable>
                                 </View>
@@ -483,7 +483,7 @@ const Notifications = ({ navigation }: { navigation: any }) => {
                                     {connectionsLoading ? (
                                         <>
                                             <ActivityIndicator size="small" color="#6733d0" />
-                                            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading collections...</Text>
+                                            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>Loading connections…</Text>
                                         </>
                                     ) : (
                                         <>
@@ -632,11 +632,11 @@ const styles = StyleSheet.create({
         color: '#666',
         textAlign: 'center',
     },
-    collectionsSearchWrap: {
+    connectionsSearchWrap: {
         paddingHorizontal: 12,
         paddingBottom: 6,
     },
-    collectionsSearchBar: {
+    connectionsSearchBar: {
         width: '100%',
         minHeight: 42,
         borderRadius: 12,
@@ -648,18 +648,18 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 8,
     },
-    collectionsSearchInput: {
+    connectionsSearchInput: {
         flex: 1,
         fontSize: 14,
         color: '#111',
         paddingVertical: 0,
     },
-    collectionRowWrap: {
+    connectionRowWrap: {
         width: '100%',
         paddingHorizontal: 12,
         paddingVertical: 6,
     },
-    collectionRow: {
+    connectionRow: {
         width: '100%',
         minHeight: 64,
         borderRadius: 14,
@@ -675,10 +675,10 @@ const styles = StyleSheet.create({
         shadowRadius: 6,
         shadowOffset: { width: 0, height: 2 },
     },
-    collectionRowPressed: {
+    connectionRowPressed: {
         backgroundColor: 'rgba(233,226,255,0.40)',
     },
-    collectionAvatar: {
+    connectionAvatar: {
         width: 42,
         height: 42,
         borderRadius: 21,
@@ -687,34 +687,34 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         marginRight: 10,
     },
-    collectionAvatarImage: {
+    connectionAvatarImage: {
         width: 42,
         height: 42,
         borderRadius: 21,
         marginRight: 10,
         backgroundColor: '#e9e2ff',
     },
-    collectionAvatarText: {
+    connectionAvatarText: {
         color: '#350d81',
         fontSize: 15,
         fontWeight: '700',
     },
-    collectionRowContent: {
+    connectionRowContent: {
         flex: 1,
         minWidth: 0,
         marginRight: 8,
     },
-    collectionName: {
+    connectionName: {
         fontSize: 15,
         fontWeight: '700',
         color: '#111',
     },
-    collectionMessage: {
+    connectionMessage: {
         fontSize: 12,
         color: '#666',
         marginRight: 10,
     },
-    collectionActionButton: {
+    connectionActionButton: {
         minHeight: 32,
         borderRadius: 9,
         borderWidth: 1,
@@ -724,10 +724,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingHorizontal: 10,
     },
-    collectionActionButtonPressed: {
+    connectionActionButtonPressed: {
         opacity: 0.8,
     },
-    collectionActionButtonText: {
+    connectionActionButtonText: {
         fontSize: 12,
         color: '#1a1073',
         fontWeight: '700',
