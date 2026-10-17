@@ -412,11 +412,14 @@ export type ChatInboxDto = {
     unreadCount?: number;
 };
 
+// History rows are metadata: only legacy (pre-encryption) messages carry text.
 export type ConversationMessageDto = {
     id: string;
-    text: string;
+    encrypted?: boolean;
+    text?: string;
     sender: 'me' | 'other';
     status?: 'sending' | 'sent' | 'delivered' | 'read';
+    clientId?: string;
     from?: string;
     to?: string;
     createdAt: string;
@@ -447,6 +450,80 @@ export const getConversationMessages = async (
         params: before ? { before } : undefined,
     });
     return response.data;
+};
+
+/* End-to-end encryption: key bundles and the pending envelope queue. */
+
+const keysUrl = (path: string) => `${String(client.defaults.baseURL).replace(/\/auth$/, '/keys')}${path}`;
+
+export type EnvelopeDto = {
+    type: 'prekey' | 'whisper';
+    body: string;
+    registrationId: number;
+    recipientRegistrationId: number;
+};
+
+export type PendingMessageDto = { id: string; from: string; to: string; envelope: EnvelopeDto; resendOf?: string; date: string };
+export type SessionResetDto = { id: string; from: string; messageIds: string[]; date: string };
+
+export type KeyUploadDto = {
+    registrationId: number;
+    identityKey: string;
+    identityDhKey: string;
+    identityDhSignature: string;
+    signedPreKey: { keyId: number; publicKey: string; signature: string };
+    oneTimePreKeys: { keyId: number; publicKey: string }[];
+};
+
+export type OwnKeyStatusDto = {
+    registrationId: number;
+    identityKey: string;
+    identityDhKey: string;
+    signedPreKey: { keyId: number; createdAt: string };
+    oneTimePreKeyCount: number;
+};
+
+/** Null when this account has no keys on the server yet. */
+export const getOwnKeyStatus = async (): Promise<OwnKeyStatusDto | null> => {
+    try {
+        return (await client.get(keysUrl('/me'))).data;
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+        throw error;
+    }
+};
+
+export const uploadKeys = async (bundle: KeyUploadDto): Promise<{ oneTimePreKeyCount: number; identityChanged: boolean }> =>
+    (await client.put(keysUrl(''), bundle)).data;
+
+export const addOneTimePreKeys = async (
+    registrationId: number,
+    oneTimePreKeys: KeyUploadDto['oneTimePreKeys']
+): Promise<{ added: number; oneTimePreKeyCount: number }> =>
+    (await client.post(keysUrl('/prekeys'), { registrationId, oneTimePreKeys })).data;
+
+export const rotateSignedPreKey = async (registrationId: number, signedPreKey: KeyUploadDto['signedPreKey']): Promise<void> => {
+    await client.put(keysUrl('/signed-prekey'), { registrationId, signedPreKey });
+};
+
+/** A contact's bundle (one one-time prekey is used up per call). */
+export const getPreKeyBundle = async (userId: string): Promise<any> =>
+    (await client.get(keysUrl(`/${encodeURIComponent(userId)}`))).data;
+
+export const getPendingMessages = async (
+    limit = 100
+): Promise<{ messages: PendingMessageDto[]; resets: SessionResetDto[]; hasMore: boolean }> =>
+    (await client.get('/messages/pending', { params: { limit } })).data;
+
+export const acknowledgeMessages = async (ids: string[], resetIds: string[] = []): Promise<void> => {
+    await client.post('/messages/ack', { ids, resetIds });
+};
+
+/** The oldest app version the server still accepts. No sign-in needed. */
+export const getMinAppVersion = async (): Promise<string | null> => {
+    const url = String(client.defaults.baseURL).replace(/\/auth$/, '/health');
+    const response = await axios.get(url, { timeout: 10000 });
+    return typeof response.data?.minAppVersion === 'string' ? response.data.minAppVersion : null;
 };
 
 export type NotificationDto = {

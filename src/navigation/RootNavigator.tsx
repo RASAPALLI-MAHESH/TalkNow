@@ -2,6 +2,8 @@ import BlockedUsers from '@/app/chatRoomScreens/BlockedUsers';
 import ChatProfile from '@/app/chatRoomScreens/chatprofile';
 import FullProfile from '@/app/chatRoomScreens/fullProfile';
 import HeroCanvas from '@/app/chatRoomScreens/HeroCanvas';
+import SafetyNumber from '@/app/chatRoomScreens/SafetyNumber';
+import UpdateRequired, { useUpdateRequired } from '@/app/components/UpdateRequired';
 import Chatroom from '@/app/components/chatroom';
 import Notifications from '@/app/components/notifications';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -48,6 +50,7 @@ const MainNavigator = () => {
             <Stack.Screen name="FullProfile" component={FullProfile} />
             <Stack.Screen name="HeroCanvas" component={HeroCanvas} />
             <Stack.Screen name="BlockedUsers" component={BlockedUsers} />
+            <Stack.Screen name="SafetyNumber" component={SafetyNumber} />
         </Stack.Navigator>
     );
 };
@@ -55,6 +58,10 @@ const MainNavigator = () => {
 const RootNavigator = () => {
     const { user, loading } = useAuth();
     usePushNotifications(!!user);
+    const update = useUpdateRequired();
+
+    // The server stopped accepting this version (e.g. it can't encrypt messages).
+    if (update.required) return <UpdateRequired onRetry={update.check} />;
 
     if (loading) {
         return (

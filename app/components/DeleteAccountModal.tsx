@@ -1,4 +1,5 @@
 import { deleteAccount, getAuthErrorMessage } from '@/services/AuthService';
+import { useE2EE } from '@/services/e2ee/E2EEProvider';
 import React, { useState } from 'react';
 import {
     ActivityIndicator,
@@ -29,6 +30,7 @@ const DeleteAccountModal = ({
 }) => {
     const [password, setPassword] = useState('');
     const [deleting, setDeleting] = useState(false);
+    const { engine } = useE2EE();
 
     const close = () => {
         if (deleting) return;
@@ -41,6 +43,8 @@ const DeleteAccountModal = ({
         setDeleting(true);
         try {
             await deleteAccount(password);
+            // The decrypted messages and keys on this phone go too.
+            await engine?.wipe().catch(() => undefined);
             setPassword('');
             onDeleted();
         } catch (err) {

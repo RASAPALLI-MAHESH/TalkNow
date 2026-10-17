@@ -30,6 +30,7 @@ This repo includes an Express + MongoDB backend in `backend/`.
 - `REPORTS_EMAIL` (recommended; user reports are emailed here so they can be reviewed quickly)
 - `EXPO_ACCESS_TOKEN` (optional; only if push security is enabled for the Expo project)
 - `CORS_ORIGINS` (optional; comma-separated browser origins allowed in production; the mobile app doesn't need it)
+- `MIN_APP_VERSION` (optional, default `1.1.0`; older apps send plain text, which the server refuses, and are shown an "update TalkNow" screen)
 
 ### App build settings
 
@@ -39,6 +40,21 @@ Set these in `eas.json` (`build.<profile>.env`):
 - `EXPO_PUBLIC_PRIVACY_URL` and `EXPO_PUBLIC_TERMS_URL`: public `https://` pages for the privacy policy and terms of use. The app stores require both; they are linked from signup and Settings.
 
 Push notifications need, once per project: an Apple Push key (EAS sets it up during `eas build` for iOS) and FCM V1 credentials for Android (`eas credentials`, plus `google-services.json` referenced from `android.googleServicesFile` in `app.json`). Without them the app works but no pushes arrive.
+
+### End-to-end encryption
+
+Messages are end-to-end encrypted with the Signal protocol design: X3DH to start a session and the Double Ratchet for every message after that, so a phone's current keys can't decrypt earlier messages (forward secrecy). Only the two phones in a chat can read it. The server, its database, backups, logs and push providers only ever see ciphertext. Metadata is not hidden: who talks to whom, when, roughly how long a message is, and IP addresses.
+
+- **Crypto code** (`services/crypto/`): X3DH and the Double Ratchet, written to Signal's published specifications on the audited `@noble` libraries (X25519, Ed25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305). It is pure TypeScript, so the same code runs on Hermes and in Node tests. The protocol code itself has not had an independent audit: get one before advertising the encryption publicly.
+- **Keys:** each install has an identity key pair, a signed prekey (rotated every 30 days) and 100 one-time prekeys (topped up below 20). Private keys never leave the phone. Public parts are published through `/api/keys`. Each one-time prekey is handed out once, in an atomic operation, and only to accepted connections.
+- **On the phone** (`services/e2ee/`): decrypted messages, sessions and keys are kept in an encrypted SQLite database (SQLCipher via `expo-sqlite`). Its random key, and the identity private keys, are kept in SecureStore (Keychain / Keystore, this device only). Android backups are turned off for the same reason. SQLCipher needs a development or production build (`eas build`); Expo Go can't run it.
+- **On the server:** a message is stored as an opaque envelope until the recipient's phone acknowledges it; then the ciphertext is deleted and only metadata (delivered/read times) remains. Phones drain `GET /api/auth/messages/pending` after each reconnect.
+- **Safety numbers:** the lock icon in a chat opens a 60-digit safety number and a QR code. Comparing them, or scanning the contact's code, marks the contact verified. If a verified contact's key changes (reinstall or new phone), sending pauses until the user acknowledges the change.
+- **Repair:** a message that can't be decrypted shows a notice. Its sender is asked to start a fresh session and send it again, and the re-send replaces the notice.
+- **Single device:** an account's messages are encrypted to its most recent install. Signing in on another phone publishes new keys, and contacts see a security code change.
+- **Transition:** messages saved as plain text by older versions are imported into the phone's encrypted store when a chat is opened. Once everyone is on 1.1.0 or later, delete them from the server with `npm run purge:plaintext` (a dry run; add `-- --confirm` to delete).
+
+Apple export compliance: `ios.config.usesNonExemptEncryption` is now `true`, so App Store Connect asks export questions on upload. A messaging app using standard algorithms usually qualifies for the mass-market exemption, but check the current US export (EAR) rules, including any annual self-classification report. The privacy policy should say that message content is end-to-end encrypted and metadata is not.
 
 ### Images
 
@@ -81,9 +97,12 @@ Or equivalently:
 node server.js
 ```
 
-### End-to-end tests
+### Tests
 
-`npm run test:e2e` boots the backend against a throwaway database and checks auth, sessions, refresh tokens, the WebSocket, images, block/report, push payloads, account deletion and rate limits. Point `TEST_MONGO_URL` at a MongoDB you can write to (default `mongodb://127.0.0.1:27017`); the test database is dropped at the end.
+- `npm run test:crypto`: protocol tests for the encryption code (no database needed).
+- `npm run test:engine`: two phones running the app's real encryption engine against the real backend: live and offline delivery, receipts, session repair, reinstall and safety numbers. Needs `TEST_MONGO_URL` like the test below.
+
+`npm run test:e2e` boots the backend against a throwaway database and checks auth, sessions, refresh tokens, the WebSocket, encrypted messaging and key bundles, images, block/report, push payloads, account deletion and rate limits. Point `TEST_MONGO_URL` at a MongoDB you can write to (default `mongodb://127.0.0.1:27017`); the test database is dropped at the end.
 
 ### Testing password reset locally
 
